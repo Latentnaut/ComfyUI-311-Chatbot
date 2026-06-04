@@ -1,0 +1,13 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local configuration
+.env
+
+# Agent Configuration & Skills
+.agent/
+
+# Chat history
+conversations/
