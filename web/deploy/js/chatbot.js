@@ -60,7 +60,7 @@ const menuSvg = `
 // Inject CSS stylesheet dynamically
 const link = document.createElement("link");
 link.rel = "stylesheet";
-link.href = "/extensions/ComfyUI-Chatbot-311/css/chatbot.css";
+link.href = "/extensions/ComfyUI-311-Chatbot/css/chatbot.css";
 document.head.appendChild(link);
 
 // Simple Markdown to HTML parser

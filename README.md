@@ -1,4 +1,4 @@
-# ComfyUI-Chatbot-311
+# ComfyUI-311-Chatbot
 
 A standalone, premium LLM Chat widget node for ComfyUI using Google Gemini 3.5 & 3.1. 
 
@@ -15,11 +15,11 @@ A standalone, premium LLM Chat widget node for ComfyUI using Google Gemini 3.5 &
 1. Clone or copy this repository into your ComfyUI `custom_nodes` directory:
    ```bash
    cd ComfyUI/custom_nodes/
-   git clone <your-repository-url> ComfyUI-Chatbot-311
+   git clone <your-repository-url> ComfyUI-311-Chatbot
    ```
 2. Create or configure the local `.env` file inside the node directory:
    ```bash
-   cd ComfyUI-Chatbot-311/
+   cd ComfyUI-311-Chatbot/
    cp .env.example .env  # Or create a new .env file
    ```
 3. Restart ComfyUI.
