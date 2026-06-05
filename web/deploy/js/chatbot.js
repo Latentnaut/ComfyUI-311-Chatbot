@@ -28,6 +28,14 @@ const trashSvg = `
   </svg>
 `;
 
+const plusSvg = `
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="12" y1="5" x2="12" y2="19"></line>
+    <line x1="5" y1="12" x2="19" y2="12"></line>
+  </svg>
+`;
+
+
 const sendSvg = `
   <svg class="chatbot311-send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -188,13 +196,6 @@ class ChatbotUI {
           <span class="chatbot311-sidebar-title">Conversations</span>
           <button class="chatbot311-btn-menu" id="btn-close-sidebar" title="Close Sidebar">${xSvg}</button>
         </div>
-        <button class="chatbot311-btn-new-chat" id="btn-new-chat">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-          New Chat
-        </button>
         <div class="chatbot311-conv-list" id="conv-list"></div>
       </div>
 
@@ -211,6 +212,7 @@ class ChatbotUI {
           </div>
         </div>
         <div class="chatbot311-header-actions">
+          <button class="chatbot311-btn-new-chat-quick" id="btn-new-chat-quick" title="New Chat">${plusSvg}</button>
           <button class="chatbot311-btn-clear" id="btn-clear" title="Clear Conversation">${trashSvg}</button>
         </div>
       </div>
@@ -246,12 +248,12 @@ class ChatbotUI {
     this.sendBtn = this.container.querySelector("#btn-send");
     this.attachBtn = this.container.querySelector("#btn-attach");
     this.clearBtn = this.container.querySelector("#btn-clear");
+    this.newChatQuickBtn = this.container.querySelector("#btn-new-chat-quick");
     this.fileInput = this.container.querySelector("#file-input");
     this.statusDot = this.container.querySelector(".chatbot311-status-dot");
     
     this.btnToggleSidebar = this.container.querySelector("#btn-toggle-sidebar");
     this.btnCloseSidebar = this.container.querySelector("#btn-close-sidebar");
-    this.btnNewChat = this.container.querySelector("#btn-new-chat");
   }
   
   setupEventListeners() {
@@ -273,6 +275,7 @@ class ChatbotUI {
     });
     
     this.clearBtn.addEventListener("click", () => this.clearChat());
+    this.newChatQuickBtn.addEventListener("click", () => this.startNewChat());
     this.attachBtn.addEventListener("click", () => this.fileInput.click());
     this.fileInput.addEventListener("change", (e) => this.handleFileSelect(e));
     
@@ -283,7 +286,6 @@ class ChatbotUI {
     this.btnCloseSidebar.addEventListener("click", () => {
       this.container.classList.remove("sidebar-open");
     });
-    this.btnNewChat.addEventListener("click", () => this.startNewChat());
     
     // Close sidebar clicking outside
     this.messagesContainer.addEventListener("click", () => {

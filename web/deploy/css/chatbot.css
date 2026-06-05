@@ -170,6 +170,38 @@
   background: rgba(239, 68, 68, 0.1);
 }
 
+.chatbot311-btn-new-chat-quick {
+  background: transparent;
+  border: none;
+  color: var(--cb311-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+
+.chatbot311-btn-new-chat-quick svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  fill: none;
+}
+
+.chatbot311-btn-new-chat-quick:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+  transform: scale(1.08);
+}
+
+.chatbot311-btn-new-chat-quick:active {
+  transform: scale(0.92);
+}
+
+
 
 /* Sidebar Conversation Manager */
 .chatbot311-sidebar {
