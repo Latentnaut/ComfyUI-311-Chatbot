@@ -554,11 +554,11 @@ class ChatbotUI {
     this.fetchConversations();
   }
   
-  getConnectedSystemPrompt() {
-    const systemInputIdx = this.node.inputs ? this.node.inputs.findIndex(input => input.name === "system") : -1;
-    if (systemInputIdx === -1) return null;
+  getConnectedInputValue(inputName) {
+    const inputIdx = this.node.inputs ? this.node.inputs.findIndex(input => input.name === inputName) : -1;
+    if (inputIdx === -1) return null;
     
-    const linkId = this.node.inputs[systemInputIdx].link;
+    const linkId = this.node.inputs[inputIdx].link;
     if (!linkId) return null;
     
     const link = app.graph.links[linkId];
@@ -600,14 +600,22 @@ class ChatbotUI {
       }
     }
 
-    // Check connected system prompt
-    const sysPrompt = this.getConnectedSystemPrompt();
+    // Check connected system prompts
+    const sysGeneral = this.getConnectedInputValue("system_general") || this.getConnectedInputValue("system");
+    const sysVariable = this.getConnectedInputValue("system_variable");
     const badgeSystem = this.container.querySelector("#badge-system");
-    if (sysPrompt !== null) {
-      if (this.connectedSystemPrompt !== sysPrompt) {
-        this.connectedSystemPrompt = sysPrompt;
+    
+    if (sysGeneral !== null || sysVariable !== null) {
+      const parts = [];
+      if (sysGeneral !== null) parts.push(`General: "${sysGeneral.slice(0, 50)}..."`);
+      if (sysVariable !== null) parts.push(`Variable: "${sysVariable.slice(0, 50)}..."`);
+      const tooltip = "Connected system prompt(s):\n" + parts.join("\n");
+      
+      const newSystemKey = (sysGeneral || "") + "|||" + (sysVariable || "");
+      if (this.connectedSystemPrompt !== newSystemKey) {
+        this.connectedSystemPrompt = newSystemKey;
         badgeSystem.style.display = "inline-block";
-        badgeSystem.title = `Connected system prompt: "${sysPrompt.slice(0, 100)}..."`;
+        badgeSystem.title = tooltip;
       }
     } else {
       if (this.connectedSystemPrompt) {
@@ -1075,6 +1083,7 @@ app.registerExtension({
   
   async beforeRegisterNodeDef(nodeType, nodeData, app) {
     if (nodeData.name === "Chatbot311") {
+      nodeType.canvasOnly = true; // Force classic canvas rendering for compatibility with Nodes 2.0
       const onConnectionsChange = nodeType.prototype.onConnectionsChange;
       nodeType.prototype.onConnectionsChange = function(type, index, connected, link_info, input_info) {
         if (onConnectionsChange) {
