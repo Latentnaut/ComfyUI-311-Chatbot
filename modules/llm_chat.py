@@ -263,6 +263,29 @@ class Chatbot311:
         if system_variable and system_variable.strip():
             system_parts.append(system_variable.strip())
             
+        # Append active output delimiters instructions
+        num_delimiters = kwargs.get("number_of_delimiters", 1)
+        if isinstance(num_delimiters, list):
+            num_delimiters = num_delimiters[0]
+        count = int(num_delimiters)
+        
+        delimiters_instructions = []
+        for i in range(1, 21):
+            if i <= count:
+                start = kwargs.get(f"starting_delimiter_{i}", f"<prompt_{i}>")
+                end = kwargs.get(f"ending_delimiter_{i}", f"</prompt_{i}>")
+                delimiters_instructions.append(f"- Delimiter {i}: Wrap the final output between '{start}' and '{end}'")
+        
+        if delimiters_instructions:
+            delim_text = (
+                "### IMPORTANT: ACTIVE OUTPUT DELIMITERS\n"
+                "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST enclose the final clean copy-pasteable output at the very end of your response using these exact delimiters (without markdown code blocks around the delimiters themselves):\n"
+                + "\n".join(delimiters_instructions)
+                + "\n\nExample of final output format:\n"
+                + f"{kwargs.get('starting_delimiter_1', '<prompt_1>')}\n(Your generated prompt/output here)\n{kwargs.get('ending_delimiter_1', '</prompt_1>')}"
+            )
+            system_parts.append(delim_text)
+            
         system = "\n\n".join(system_parts)
 
         

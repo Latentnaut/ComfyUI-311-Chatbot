@@ -948,7 +948,33 @@ class ChatbotUI {
     
     // Build messages payload for API (connected system prompt vs default system prompt)
     const apiMessages = [];
-    const activeSystemPrompt = this.connectedSystemPrompt || this.defaultSystemPrompt;
+    let activeSystemPrompt = this.connectedSystemPrompt || this.defaultSystemPrompt;
+
+    // Read active delimiters from node widgets to inject into Gemini system instructions
+    const delimitersInfo = [];
+    const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
+    const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
+    for (let i = 1; i <= count; i++) {
+      const startW = this.node.widgets?.find(w => w && w.name === `starting_delimiter_${i}`);
+      const endW = this.node.widgets?.find(w => w && w.name === `ending_delimiter_${i}`);
+      if (startW && endW) {
+        delimitersInfo.push({
+          index: i,
+          start: startW.value,
+          end: endW.value
+        });
+      }
+    }
+
+    if (delimitersInfo.length > 0) {
+      activeSystemPrompt = (activeSystemPrompt || "").trim() + 
+        "\n\n### IMPORTANT: ACTIVE OUTPUT DELIMITERS\n" +
+        "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST enclose the final clean copy-pasteable output at the very end of your response using these exact delimiters (without markdown code blocks around the delimiters themselves):\n" +
+        delimitersInfo.map(d => `- Delimiter ${d.index}: Wrap the final output between '${d.start}' and '${d.end}'`).join("\n") +
+        "\n\nExample of final output format:\n" +
+        `${delimitersInfo[0].start}\n(Your generated prompt/output here)\n${delimitersInfo[0].end}`;
+    }
+
     if (activeSystemPrompt && activeSystemPrompt.trim()) {
       apiMessages.push({
         role: "system",
