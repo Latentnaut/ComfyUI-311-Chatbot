@@ -72,7 +72,7 @@ link.href = "/extensions/ComfyUI-311-Chatbot/css/chatbot.css";
 document.head.appendChild(link);
 
 // Simple Markdown to HTML parser
-function parseMarkdown(text) {
+function parseMarkdown(text, delimiters = []) {
   if (!text) return "";
   
   // 1. Escape HTML entities
@@ -92,26 +92,43 @@ function parseMarkdown(text) {
   // 3. Inline code
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   
-  // 4. Headers (H1-H6)
+  // 4. Wrap custom delimiters in code blocks
+  if (delimiters && delimiters.length > 0) {
+    delimiters.forEach(d => {
+      // Escape delimiter html tags for regex matching
+      const escapedStartHtml = d.start.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const escapedEndHtml = d.end.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      
+      const escapedStartHtmlRegex = escapedStartHtml.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const escapedEndHtmlRegex = escapedEndHtml.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+      const regex = new RegExp(escapedStartHtmlRegex + '([\\s\\S]*?)' + escapedEndHtmlRegex, 'gm');
+      html = html.replace(regex, (match, content) => {
+        return `<pre><code class="language-text">${escapedStartHtml}\n${content.trim()}\n${escapedEndHtml}</code></pre>`;
+      });
+    });
+  }
+  
+  // 5. Headers (H1-H6)
   html = html.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, content) => {
     const level = hashes.length;
     return `<h${level} class="chatbot311-h${level}">${content}</h${level}>`;
   });
   
-  // 5. Bullet lists
+  // 6. Bullet lists
   html = html.replace(/^\s*[-*+]\s+(.+)$/gm, '<div class="chatbot311-list-item">• $1</div>');
   
-  // 6. Numbered lists
+  // 7. Numbered lists
   html = html.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<div class="chatbot311-list-item">$1. $2</div>');
   
-  // 7. Bold and Italic
+  // 8. Bold and Italic
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   
-  // 8. Newlines
+  // 9. Newlines
   html = html.replace(/\n/g, "<br>");
   
-  // 9. Restore code blocks
+  // 10. Restore code blocks
   codeBlocks.forEach((block, idx) => {
     html = html.replace(`__CODE_BLOCK_${idx}__`, block);
   });
@@ -867,7 +884,7 @@ class ChatbotUI {
     }
     
     const textSpan = document.createElement("span");
-    textSpan.innerHTML = parseMarkdown(text);
+    textSpan.innerHTML = parseMarkdown(text, this.getDelimiters());
     inner.appendChild(textSpan);
     
     bubble.appendChild(inner);
@@ -1097,7 +1114,7 @@ class ChatbotUI {
               const parsed = JSON.parse(cleaned.slice(6));
               const delta = parsed.choices[0].delta.content || "";
               accumulated += delta;
-              textSpan.innerHTML = parseMarkdown(accumulated);
+              textSpan.innerHTML = parseMarkdown(accumulated, this.getDelimiters());
               this.scrollBottom();
             } catch (e) {
               // Suppress partial chunk errors
@@ -1160,6 +1177,23 @@ class ChatbotUI {
       widget.value = val;
     }
     this.node.trigger("change");
+  }
+  
+  getDelimiters() {
+    const delimiters = [];
+    const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
+    const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
+    for (let i = 1; i <= count; i++) {
+      const startW = this.node.widgets?.find(w => w && w.name === `starting_delimiter_${i}`);
+      const endW = this.node.widgets?.find(w => w && w.name === `ending_delimiter_${i}`);
+      if (startW && endW) {
+        delimiters.push({
+          start: startW.value,
+          end: endW.value
+        });
+      }
+    }
+    return delimiters;
   }
   
   destroy() {
