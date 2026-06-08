@@ -195,6 +195,36 @@
   transform: scale(0.95);
 }
 
+.chatbot311-btn-undo {
+  background: transparent;
+  border: none;
+  color: var(--cb311-text-muted);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+}
+
+.chatbot311-btn-undo svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.chatbot311-btn-undo:hover {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.chatbot311-btn-undo:active {
+  transform: scale(0.92);
+}
+
 .chatbot311-btn-new-chat-quick {
   background: transparent;
   border: none;
@@ -492,31 +522,33 @@
   transform: scale(1.05);
 }
 
-/* Bubble action toolbar */
+/* Bubble action toolbar repositioned under the bubble */
 .chatbot311-msg-toolbar {
   display: flex;
-  gap: 5px;
-  position: absolute;
-  bottom: -10px;
-  right: 10px;
+  gap: 4px;
   opacity: 0;
-  transform: translateY(-3px);
-  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.15s ease;
   pointer-events: none;
-  z-index: 5;
-  background: rgba(30, 30, 38, 0.9);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  padding: 1px 5px;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+  margin-top: 4px;
+}
+
+.chatbot311-message.user .chatbot311-msg-toolbar {
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+
+.chatbot311-message.assistant .chatbot311-msg-toolbar {
+  align-self: flex-start;
+  justify-content: flex-start;
 }
 
 .chatbot311-message:hover .chatbot311-msg-toolbar {
-  opacity: 1;
-  transform: translateY(0);
+  opacity: 0.7;
   pointer-events: auto;
+}
+
+.chatbot311-message:hover .chatbot311-msg-toolbar:hover {
+  opacity: 1;
 }
 
 .chatbot311-msg-btn {
@@ -530,7 +562,7 @@
   justify-content: center;
   cursor: pointer;
   color: var(--cb311-text-muted);
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
   padding: 0;
 }
 
@@ -550,6 +582,12 @@
 .chatbot311-msg-btn.delete:hover {
   background-color: rgba(239, 68, 68, 0.15);
   color: var(--cb311-glow-red);
+}
+
+.chatbot311-msg-btn.copied {
+  color: var(--cb311-glow-green) !important;
+  transform: scale(1.1);
+  background-color: rgba(16, 185, 129, 0.1) !important;
 }
 
 /* Codeblocks styling */

@@ -65,6 +65,26 @@ const menuSvg = `
   </svg>
 `;
 
+const undoSvg = `
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 7v6h6"></path>
+    <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>
+  </svg>
+`;
+
+const checkSvg = `
+  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#10b981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="20 6 9 17 4 12"></polyline>
+  </svg>
+`;
+
+const editPenSvg = `
+  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 20h9"></path>
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+  </svg>
+`;
+
 // Inject CSS stylesheet dynamically
 const link = document.createElement("link");
 link.rel = "stylesheet";
@@ -324,6 +344,8 @@ class ChatbotUI {
     this.currentChatId = 'chat_' + Math.random().toString(36).substring(2, 15);
     this.chatName = "";
     this.isGenerating = false;
+    this.undoStack = [];
+    this.undoBtn = null;
     
     this.buildUI();
     this.setupEventListeners();
@@ -358,6 +380,7 @@ class ChatbotUI {
           </div>
         </div>
         <div class="chatbot311-header-actions">
+          <button class="chatbot311-btn-undo" id="btn-undo" title="Deshacer" style="display: none;">${undoSvg}</button>
           <button class="chatbot311-btn-new-chat-quick" id="btn-new-chat-quick" title="New Chat">${plusSvg}</button>
           <button class="chatbot311-btn-clear" id="btn-clear" title="Clear Conversation">${trashSvg}</button>
         </div>
@@ -395,6 +418,7 @@ class ChatbotUI {
     this.attachBtn = this.container.querySelector("#btn-attach");
     this.clearBtn = this.container.querySelector("#btn-clear");
     this.newChatQuickBtn = this.container.querySelector("#btn-new-chat-quick");
+    this.undoBtn = this.container.querySelector("#btn-undo");
     this.fileInput = this.container.querySelector("#file-input");
     this.statusDot = this.container.querySelector(".chatbot311-status-dot");
     
@@ -424,6 +448,10 @@ class ChatbotUI {
     this.newChatQuickBtn.addEventListener("click", () => this.startNewChat());
     this.attachBtn.addEventListener("click", () => this.fileInput.click());
     this.fileInput.addEventListener("change", (e) => this.handleFileSelect(e));
+    
+    if (this.undoBtn) {
+      this.undoBtn.addEventListener("click", () => this.undoLastAction());
+    }
     
     // Sidebar triggers
     this.btnToggleSidebar.addEventListener("click", () => {
@@ -668,6 +696,8 @@ class ChatbotUI {
         this.currentChatId = data.id;
         this.chatName = data.name;
         this.history = data.history;
+        this.undoStack = [];
+        this.updateUndoButtonVisibility();
         this.renderMessages();
         this.updateNodeValue();
         this.container.classList.remove("sidebar-open");
@@ -738,6 +768,8 @@ class ChatbotUI {
     this.currentChatId = 'chat_' + Math.random().toString(36).substring(2, 15);
     this.chatName = "";
     this.history = [];
+    this.undoStack = [];
+    this.updateUndoButtonVisibility();
     this.renderMessages();
     this.updateNodeValue();
     this.container.classList.remove("sidebar-open");
@@ -983,14 +1015,33 @@ class ChatbotUI {
       copyBtn.title = "Copy message text";
       copyBtn.addEventListener("click", () => {
         navigator.clipboard.writeText(text);
+        copyBtn.innerHTML = checkSvg;
+        copyBtn.classList.add("copied");
+        setTimeout(() => {
+          copyBtn.innerHTML = copySvg;
+          copyBtn.classList.remove("copied");
+        }, 1500);
       });
       toolbar.appendChild(copyBtn);
+      
+      const reuseBtn = document.createElement("button");
+      reuseBtn.className = "chatbot311-msg-btn";
+      reuseBtn.innerHTML = editPenSvg;
+      reuseBtn.title = "Reutilizar mensaje (elimina posteriores)";
+      reuseBtn.addEventListener("click", () => {
+        this.reuseMessage(index);
+      });
+      toolbar.appendChild(reuseBtn);
       
       const delBtn = document.createElement("button");
       delBtn.className = "chatbot311-msg-btn delete";
       delBtn.innerHTML = xSvg;
       delBtn.title = "Delete message";
-      delBtn.addEventListener("click", () => this.deleteMessage(index));
+      delBtn.addEventListener("click", () => {
+        if (confirm("¿Estás seguro de que deseas eliminar este mensaje?")) {
+          this.deleteMessage(index);
+        }
+      });
       toolbar.appendChild(delBtn);
       
       bubble.appendChild(toolbar);
@@ -1229,7 +1280,56 @@ class ChatbotUI {
     this.renderMessages();
   }
   
+  saveUndoState() {
+    if (!this.undoStack) this.undoStack = [];
+    this.undoStack.push(JSON.stringify(this.history));
+    if (this.undoStack.length > 10) this.undoStack.shift();
+    this.updateUndoButtonVisibility();
+  }
+
+  undoLastAction() {
+    if (!this.undoStack || this.undoStack.length === 0) return;
+    const previousState = this.undoStack.pop();
+    this.history = JSON.parse(previousState);
+    this.renderMessages();
+    this.updateNodeValue();
+    this.saveActiveConversation();
+    this.updateUndoButtonVisibility();
+  }
+
+  updateUndoButtonVisibility() {
+    if (this.undoBtn) {
+      this.undoBtn.style.display = this.undoStack && this.undoStack.length > 0 ? "flex" : "none";
+    }
+  }
+
+  reuseMessage(idx) {
+    if (confirm("¿Reutilizar este mensaje? Se eliminarán todos los mensajes posteriores de la conversación.")) {
+      this.saveUndoState();
+      const msg = this.history[idx];
+      let text = "";
+      if (Array.isArray(msg.content)) {
+        const textPart = msg.content.find(p => p.type === "text");
+        text = textPart ? textPart.text : "";
+      } else {
+        text = msg.content || "";
+      }
+      
+      if (msg.role === "user") {
+        this.textarea.value = text;
+        this.textarea.style.height = "auto";
+        this.textarea.style.height = (this.textarea.scrollHeight) + "px";
+      }
+      
+      this.history = this.history.slice(0, idx + 1);
+      this.renderMessages();
+      this.updateNodeValue();
+      this.saveActiveConversation();
+    }
+  }
+
   deleteMessage(idx) {
+    this.saveUndoState();
     this.history.splice(idx, 1);
     this.renderMessages();
     this.updateNodeValue();
@@ -1240,6 +1340,7 @@ class ChatbotUI {
     if (this.history.length === 0) return;
     if (!confirm("¿Estás seguro de que deseas limpiar esta conversación?")) return;
     
+    this.saveUndoState();
     this.history = [];
     this.chatName = "";
     this.renderMessages();
