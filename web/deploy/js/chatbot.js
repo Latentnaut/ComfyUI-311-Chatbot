@@ -380,7 +380,7 @@ class ChatbotUI {
           </div>
         </div>
         <div class="chatbot311-header-actions">
-          <button class="chatbot311-btn-undo" id="btn-undo" title="Deshacer" style="display: none;">${undoSvg}</button>
+          <button class="chatbot311-btn-undo" id="btn-undo" title="Undo" style="display: none;">${undoSvg}</button>
           <button class="chatbot311-btn-new-chat-quick" id="btn-new-chat-quick" title="New Chat">${plusSvg}</button>
           <button class="chatbot311-btn-clear" id="btn-clear" title="Clear Conversation">${trashSvg}</button>
         </div>
@@ -1027,7 +1027,7 @@ class ChatbotUI {
       const reuseBtn = document.createElement("button");
       reuseBtn.className = "chatbot311-msg-btn";
       reuseBtn.innerHTML = editPenSvg;
-      reuseBtn.title = "Reutilizar mensaje (elimina posteriores)";
+      reuseBtn.title = "Reuse message (deletes subsequent)";
       reuseBtn.addEventListener("click", () => {
         this.reuseMessage(index);
       });
@@ -1038,7 +1038,7 @@ class ChatbotUI {
       delBtn.innerHTML = xSvg;
       delBtn.title = "Delete message";
       delBtn.addEventListener("click", () => {
-        if (confirm("¿Estás seguro de que deseas eliminar este mensaje?")) {
+        if (confirm("Are you sure you want to delete this message?")) {
           this.deleteMessage(index);
         }
       });
@@ -1304,7 +1304,7 @@ class ChatbotUI {
   }
 
   reuseMessage(idx) {
-    if (confirm("¿Reutilizar este mensaje? Se eliminarán todos los mensajes posteriores de la conversación.")) {
+    if (confirm("Are you sure you want to reuse this message? All subsequent messages will be deleted.")) {
       this.saveUndoState();
       const msg = this.history[idx];
       let text = "";
@@ -1338,7 +1338,7 @@ class ChatbotUI {
   
   clearChat() {
     if (this.history.length === 0) return;
-    if (!confirm("¿Estás seguro de que deseas limpiar esta conversación?")) return;
+    if (!confirm("Are you sure you want to clear this conversation?")) return;
     
     this.saveUndoState();
     this.history = [];
