@@ -109,26 +109,76 @@ function parseMarkdown(text, delimiters = []) {
     });
   }
   
-  // 5. Headers (H1-H6)
-  html = html.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, content) => {
-    const level = hashes.length;
-    return `<h${level} class="chatbot311-h${level}">${content}</h${level}>`;
-  });
+  // 5. Statefully process lines for headers, lists, and paragraphs
+  const lines = html.split('\n');
+  let inBulletList = false;
+  let inNumberedList = false;
+  const processedLines = [];
   
-  // 6. Bullet lists
-  html = html.replace(/^\s*[-*+]\s+(.+)$/gm, '<div class="chatbot311-list-item">• $1</div>');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    
+    // Skip if it's a code block placeholder
+    if (trimmed.startsWith('__CODE_BLOCK_') && trimmed.endsWith('__')) {
+      if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
+      if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
+      processedLines.push(line);
+      continue;
+    }
+    
+    // Headers
+    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headerMatch) {
+      if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
+      if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
+      const level = headerMatch[1].length;
+      processedLines.push(`<h${level} class="chatbot311-h${level}">${headerMatch[2]}</h${level}>`);
+      continue;
+    }
+    
+    // Bullet list items
+    const bulletMatch = line.match(/^\s*[-*+]\s+(.+)$/);
+    if (bulletMatch) {
+      if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
+      if (!inBulletList) { processedLines.push('<ul class="chatbot311-list-ul">'); inBulletList = true; }
+      processedLines.push(`<li>${bulletMatch[1]}</li>`);
+      continue;
+    }
+    
+    // Numbered list items
+    const numberedMatch = line.match(/^\s*(\d+)\.\s+(.+)$/);
+    if (numberedMatch) {
+      if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
+      if (!inNumberedList) { processedLines.push('<ol class="chatbot311-list-ol">'); inNumberedList = true; }
+      processedLines.push(`<li>${numberedMatch[2]}</li>`);
+      continue;
+    }
+    
+    // Empty line
+    if (trimmed === '') {
+      if (!inBulletList && !inNumberedList) {
+        processedLines.push('<br>');
+      }
+      continue;
+    }
+    
+    // Standard text line
+    if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
+    if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
+    processedLines.push(line);
+  }
   
-  // 7. Numbered lists
-  html = html.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<div class="chatbot311-list-item">$1. $2</div>');
+  if (inBulletList) processedLines.push('</ul>');
+  if (inNumberedList) processedLines.push('</ol>');
   
-  // 8. Bold and Italic
+  html = processedLines.join('\n');
+  
+  // 6. Bold and Italic
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   
-  // 9. Newlines
-  html = html.replace(/\n/g, "<br>");
-  
-  // 10. Restore code blocks
+  // 7. Restore code blocks
   codeBlocks.forEach((block, idx) => {
     html = html.replace(`__CODE_BLOCK_${idx}__`, block);
   });
