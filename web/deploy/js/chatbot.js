@@ -115,6 +115,17 @@ function parseMarkdown(text, delimiters = []) {
   let inNumberedList = false;
   const processedLines = [];
   
+  function cleanTrailingNewlines() {
+    if (processedLines.length > 0) {
+      const lastIdx = processedLines.length - 1;
+      if (processedLines[lastIdx] === '\n') {
+        processedLines.pop();
+      } else if (processedLines[lastIdx].endsWith('\n')) {
+        processedLines[lastIdx] = processedLines[lastIdx].slice(0, -1);
+      }
+    }
+  }
+  
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
@@ -123,7 +134,8 @@ function parseMarkdown(text, delimiters = []) {
     if (trimmed.startsWith('__CODE_BLOCK_') && trimmed.endsWith('__')) {
       if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
       if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
-      processedLines.push(line);
+      cleanTrailingNewlines();
+      processedLines.push(line); // No trailing newline for block tags
       continue;
     }
     
@@ -132,8 +144,9 @@ function parseMarkdown(text, delimiters = []) {
     if (headerMatch) {
       if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
       if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
+      cleanTrailingNewlines();
       const level = headerMatch[1].length;
-      processedLines.push(`<h${level} class="chatbot311-h${level}">${headerMatch[2]}</h${level}>`);
+      processedLines.push(`<h${level} class="chatbot311-h${level}">${headerMatch[2]}</h${level}>`); // No trailing newline for block tags
       continue;
     }
     
@@ -141,8 +154,12 @@ function parseMarkdown(text, delimiters = []) {
     const bulletMatch = line.match(/^\s*[-*+]\s+(.+)$/);
     if (bulletMatch) {
       if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
-      if (!inBulletList) { processedLines.push('<ul class="chatbot311-list-ul">'); inBulletList = true; }
-      processedLines.push(`<li>${bulletMatch[1]}</li>`);
+      if (!inBulletList) { 
+        cleanTrailingNewlines();
+        processedLines.push('<ul class="chatbot311-list-ul">'); 
+        inBulletList = true; 
+      }
+      processedLines.push(`<li>${bulletMatch[1]}</li>`); // No trailing newline for block tags
       continue;
     }
     
@@ -150,15 +167,32 @@ function parseMarkdown(text, delimiters = []) {
     const numberedMatch = line.match(/^\s*(\d+)\.\s+(.+)$/);
     if (numberedMatch) {
       if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
-      if (!inNumberedList) { processedLines.push('<ol class="chatbot311-list-ol">'); inNumberedList = true; }
-      processedLines.push(`<li>${numberedMatch[2]}</li>`);
+      if (!inNumberedList) { 
+        cleanTrailingNewlines();
+        processedLines.push('<ol class="chatbot311-list-ol">'); 
+        inNumberedList = true; 
+      }
+      processedLines.push(`<li>${numberedMatch[2]}</li>`); // No trailing newline for block tags
       continue;
     }
     
     // Empty line
     if (trimmed === '') {
       if (!inBulletList && !inNumberedList) {
-        processedLines.push('<br>');
+        if (processedLines.length > 0) {
+          const last = processedLines[processedLines.length - 1];
+          // Only add newline if previous line didn't end in block tag or newline
+          if (!last.endsWith('\n') && 
+              !last.startsWith('<h') && 
+              !last.startsWith('</ul') && 
+              !last.startsWith('</ol') && 
+              !last.startsWith('<pre') && 
+              !last.startsWith('</pre>') && 
+              !last.startsWith('<blockquote') && 
+              !last.startsWith('</blockquote>')) {
+            processedLines.push('\n');
+          }
+        }
       }
       continue;
     }
@@ -166,13 +200,13 @@ function parseMarkdown(text, delimiters = []) {
     // Standard text line
     if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
     if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
-    processedLines.push(line);
+    processedLines.push(line + '\n'); // Keep natural trailing newline
   }
   
   if (inBulletList) processedLines.push('</ul>');
   if (inNumberedList) processedLines.push('</ol>');
   
-  html = processedLines.join('\n');
+  html = processedLines.join('');
   
   // 6. Bold and Italic
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
