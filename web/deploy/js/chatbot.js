@@ -91,24 +91,44 @@ link.rel = "stylesheet";
 link.href = "/extensions/ComfyUI-311-Chatbot/css/chatbot.css";
 document.head.appendChild(link);
 
+function unescapeHtml(html) {
+  if (!html) return "";
+  return html
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 // Simple Markdown to HTML parser
 function parseMarkdown(text, delimiters = []) {
   if (!text) return "";
   
-  // 1. Escape HTML entities
-  let html = text
+  // 1. Extract fenced code blocks from raw text before escaping HTML
+  const codeBlocks = [];
+  let html = text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    const id = `__CODE_BLOCK_${codeBlocks.length}__`;
+    const rawCode = code.trim();
+    // Escape for HTML rendering only
+    const escapedCodeForHtml = rawCode
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+      
+    codeBlocks.push(`
+      <div class="chatbot311-codeblock-container">
+        <pre><code class="language-${lang}">${escapedCodeForHtml}</code></pre>
+        <button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawCode)}" title="Copy code">${copySvg}</button>
+      </div>
+    `);
+    return id;
+  });
+  
+  // 2. Escape HTML entities on the rest of the text
+  html = html
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
     
-  // 2. Extract fenced code blocks to prevent parsing markdown within them
-  const codeBlocks = [];
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    const id = `__CODE_BLOCK_${codeBlocks.length}__`;
-    codeBlocks.push(`<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
-    return id;
-  });
-  
   // 3. Inline code
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   
@@ -124,7 +144,13 @@ function parseMarkdown(text, delimiters = []) {
 
       const regex = new RegExp(escapedStartHtmlRegex + '([\\s\\S]*?)' + escapedEndHtmlRegex, 'gm');
       html = html.replace(regex, (match, content) => {
-        return `<pre><code class="language-text">${escapedStartHtml}\n${content.trim()}\n${escapedEndHtml}</code></pre>`;
+        const rawContent = unescapeHtml(content.trim());
+        return `
+          <div class="chatbot311-codeblock-container">
+            <pre><code class="language-text">${escapedStartHtml}\n${content.trim()}\n${escapedEndHtml}</code></pre>
+            <button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button>
+          </div>
+        `;
       });
     });
   }
@@ -452,6 +478,23 @@ class ChatbotUI {
     if (this.undoBtn) {
       this.undoBtn.addEventListener("click", () => this.undoLastAction());
     }
+    
+    // Code block copy delegation click handler
+    this.messagesContainer.addEventListener("click", (e) => {
+      const copyBtn = e.target.closest(".chatbot311-codeblock-copy-btn");
+      if (copyBtn) {
+        const rawPrompt = decodeURIComponent(copyBtn.getAttribute("data-raw-prompt") || "");
+        if (rawPrompt) {
+          navigator.clipboard.writeText(rawPrompt);
+          copyBtn.innerHTML = checkSvg;
+          copyBtn.classList.add("copied");
+          setTimeout(() => {
+            copyBtn.innerHTML = copySvg;
+            copyBtn.classList.remove("copied");
+          }, 1500);
+        }
+      }
+    });
     
     // Sidebar triggers
     this.btnToggleSidebar.addEventListener("click", () => {

@@ -1045,3 +1045,56 @@
   display: list-item !important;
   padding-left: 4px !important;
 }
+
+/* Code block container with hover copy button */
+.chatbot311-codeblock-container {
+  position: relative;
+  width: 100%;
+}
+
+.chatbot311-codeblock-copy-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: rgba(30, 30, 35, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--cb311-text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+  padding: 0;
+  z-index: 2;
+}
+
+.chatbot311-codeblock-container:hover .chatbot311-codeblock-copy-btn {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+.chatbot311-codeblock-copy-btn:hover {
+  opacity: 1 !important;
+  background-color: rgba(50, 50, 60, 0.9);
+  color: #ffffff;
+}
+
+.chatbot311-codeblock-copy-btn svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.chatbot311-codeblock-copy-btn.copied {
+  color: var(--cb311-glow-green) !important;
+  transform: scale(1.1);
+  background-color: rgba(16, 185, 129, 0.15) !important;
+  opacity: 1 !important;
+}
