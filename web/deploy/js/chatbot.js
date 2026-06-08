@@ -1166,9 +1166,11 @@ app.registerExtension({
         node.chatbotWidget = widget;
         node.chatbotUI = chatbot;
         
-        node.size = [380, 580];
-        if (node.setSize) {
-          node.setSize([380, 580]);
+        if (!node.size || node.size[0] < 200 || node.size[1] < 200) {
+          node.size = [380, 580];
+          if (node.setSize) {
+            node.setSize([380, 580]);
+          }
         }
         
         const onRemoved = node.onRemoved;
@@ -1343,8 +1345,8 @@ app.registerExtension({
           
           updateNodeLayout();
 
-          // Auto heal size on load if it's excessively large
-          if (node.size && node.size[1] > 800) {
+          // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
+          if (node.size && node.size[1] > 3000) {
             node.setSize([380, 580]);
           }
         }, 100);
@@ -1428,8 +1430,8 @@ app.registerExtension({
           
           updateNodeLayout();
 
-          // Auto heal size on load if it's excessively large
-          if (node.size && node.size[1] > 800) {
+          // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
+          if (node.size && node.size[1] > 3000) {
             node.setSize([380, 580]);
           }
           
