@@ -75,19 +75,46 @@ document.head.appendChild(link);
 function parseMarkdown(text) {
   if (!text) return "";
   
+  // 1. Escape HTML entities
   let html = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
     
+  // 2. Extract fenced code blocks to prevent parsing markdown within them
+  const codeBlocks = [];
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code class="language-${lang}">${code.trim()}</code></pre>`;
+    const id = `__CODE_BLOCK_${codeBlocks.length}__`;
+    codeBlocks.push(`<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
+    return id;
   });
   
+  // 3. Inline code
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  
+  // 4. Headers (H1-H6)
+  html = html.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, content) => {
+    const level = hashes.length;
+    return `<h${level} class="chatbot311-h${level}">${content}</h${level}>`;
+  });
+  
+  // 5. Bullet lists
+  html = html.replace(/^\s*[-*+]\s+(.+)$/gm, '<div class="chatbot311-list-item">• $1</div>');
+  
+  // 6. Numbered lists
+  html = html.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<div class="chatbot311-list-item">$1. $2</div>');
+  
+  // 7. Bold and Italic
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  
+  // 8. Newlines
   html = html.replace(/\n/g, "<br>");
+  
+  // 9. Restore code blocks
+  codeBlocks.forEach((block, idx) => {
+    html = html.replace(`__CODE_BLOCK_${idx}__`, block);
+  });
   
   return html;
 }
