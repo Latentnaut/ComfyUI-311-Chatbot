@@ -108,33 +108,50 @@ async function getConnectedImages(node) {
   
   let imagesToFetch = [];
   
-  // Case 1: LoadImage node
-  if (originNode.type === "LoadImage" || originNode.comfyClass === "LoadImage") {
-    const imageWidget = originNode.widgets ? originNode.widgets.find(w => w.name === "image") : null;
-    if (imageWidget && imageWidget.value) {
+  // Case 1: Standard LoadImage or custom loader nodes (e.g. check widgets for image filename)
+  const imageWidget = originNode.widgets ? originNode.widgets.find(w => w.name === "image" || w.name === "image_path" || w.name === "file_name") : null;
+  if (imageWidget && imageWidget.value && typeof imageWidget.value === "string") {
+    const val = imageWidget.value.toLowerCase();
+    if (val.endsWith(".png") || val.endsWith(".jpg") || val.endsWith(".jpeg") || val.endsWith(".webp") || val.endsWith(".gif")) {
+      const type = originNode.type === "LoadImage" || originNode.comfyClass === "LoadImage" ? "input" : "output";
       imagesToFetch.push({
         filename: imageWidget.value,
-        url: `/view?filename=${encodeURIComponent(imageWidget.value)}&type=input`
+        url: api.apiURL(`/view?filename=${encodeURIComponent(imageWidget.value)}&type=${type}`)
       });
     }
   }
   
-  // Case 2: Preview nodes
-  if (imagesToFetch.length === 0 && originNode.imgs && originNode.imgs.length > 0) {
-    originNode.imgs.forEach((img, idx) => {
+  // Case 2: Node outputs from app.node_outputs (results of the last execution)
+  const nodeOutputs = app.node_outputs?.[originNode.id];
+  if (imagesToFetch.length === 0 && nodeOutputs && nodeOutputs.images && nodeOutputs.images.length > 0) {
+    nodeOutputs.images.forEach((img, idx) => {
       imagesToFetch.push({
-        filename: `preview_${idx}.png`,
-        url: img.src
+        filename: img.filename || `output_${idx}.png`,
+        url: api.apiURL(`/view?filename=${encodeURIComponent(img.filename)}&type=${img.type || "output"}&subfolder=${encodeURIComponent(img.subfolder || "")}`)
       });
     });
   }
   
-  // Case 3: Output images
+  // Case 3: Output images on the node object itself
   if (imagesToFetch.length === 0 && originNode.images && originNode.images.length > 0) {
     originNode.images.forEach((img, idx) => {
       imagesToFetch.push({
         filename: img.filename || `output_${idx}.png`,
-        url: `/view?filename=${encodeURIComponent(img.filename)}&type=${img.type || "output"}&subfolder=${encodeURIComponent(img.subfolder || "")}`
+        url: api.apiURL(`/view?filename=${encodeURIComponent(img.filename)}&type=${img.type || "output"}&subfolder=${encodeURIComponent(img.subfolder || "")}`)
+      });
+    });
+  }
+  
+  // Case 4: Preview images (.imgs property)
+  if (imagesToFetch.length === 0 && originNode.imgs && originNode.imgs.length > 0) {
+    originNode.imgs.forEach((img, idx) => {
+      let src = img.src;
+      if (src && !src.startsWith("blob:") && !src.startsWith("data:") && !src.startsWith("http")) {
+        src = api.apiURL(src);
+      }
+      imagesToFetch.push({
+        filename: `preview_${idx}.png`,
+        url: src
       });
     });
   }
@@ -185,6 +202,7 @@ class ChatbotUI {
     this.checkAPIStatus();
     this.fetchDefaultSystemPrompt();
     this.fetchConversations();
+    this.checkPausedStatus();
     
     this.connectionCheckInterval = setInterval(() => this.checkConnections(), 2000);
   }
@@ -318,6 +336,8 @@ class ChatbotUI {
       if (String(node_id) === String(this.node.id)) {
         this.history = history;
         this.renderMessages();
+        this.updateNodeValue();
+        this.saveActiveConversation();
       }
     });
 
@@ -345,6 +365,32 @@ class ChatbotUI {
         }
       }
     });
+
+    // Global paste handler: paste clipboard images when the node is selected
+    this._globalPasteHandler = (e) => {
+      const isSelected = app.canvas?.selected_nodes && app.canvas.selected_nodes[this.node.id] !== undefined;
+      if (!isSelected) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      let hasImages = false;
+      for (const item of items) {
+        if (item.type.indexOf("image") !== -1) {
+          const file = item.getAsFile();
+          if (file) {
+            hasImages = true;
+            this.processFile(file);
+          }
+        }
+      }
+
+      if (hasImages) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener("paste", this._globalPasteHandler);
   }
 
   async confirmResume() {
@@ -392,6 +438,22 @@ class ChatbotUI {
     } catch (e) {
       this.statusDot.className = "chatbot311-status-dot offline";
       this.showOfflineOverlay(true);
+    }
+  }
+
+  async checkPausedStatus() {
+    try {
+      const response = await fetch(`/chatbot-311/chat/paused-status/${this.node.id}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.paused) {
+          if (this.confirmBanner) {
+            this.confirmBanner.style.display = "flex";
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to check paused status:", e);
     }
   }
 
@@ -900,6 +962,42 @@ class ChatbotUI {
         content: msg.content
       });
     });
+
+    // Ensure the latest user message in apiMessages has the image if present in earlier messages,
+    // because Gemini's OpenAI-compatible API ignores images in past history.
+    if (apiMessages.length > 0) {
+      const lastMsg = apiMessages[apiMessages.length - 1];
+      if (lastMsg.role === "user") {
+        let hasImage = false;
+        if (Array.isArray(lastMsg.content)) {
+          hasImage = lastMsg.content.some(part => part.type === "image_url");
+        }
+        
+        if (!hasImage) {
+          // Find the most recent image in the conversation history
+          let foundImages = [];
+          for (let i = apiMessages.length - 2; i >= 0; i--) {
+            const msg = apiMessages[i];
+            if (msg.role === "user" && Array.isArray(msg.content)) {
+              const imgs = msg.content.filter(part => part.type === "image_url");
+              if (imgs.length > 0) {
+                foundImages = imgs;
+                break;
+              }
+            }
+          }
+          
+          if (foundImages.length > 0) {
+            // Convert lastMsg.content to array if it is a string
+            if (typeof lastMsg.content === "string") {
+              lastMsg.content = [{ type: "text", text: lastMsg.content }];
+            }
+            // Append the found images
+            lastMsg.content = [...lastMsg.content, ...foundImages];
+          }
+        }
+      }
+    }
     
     try {
       const response = await fetch("/chatbot-311/proxy/gemini/v1/chat/completions", {
@@ -1013,6 +1111,9 @@ class ChatbotUI {
   
   destroy() {
     clearInterval(this.connectionCheckInterval);
+    if (this._globalPasteHandler) {
+      window.removeEventListener("paste", this._globalPasteHandler);
+    }
   }
 }
 

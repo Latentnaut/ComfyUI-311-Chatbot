@@ -16,6 +16,7 @@ from .chatbot_utils import CATEGORY, FUNCTION, Input, normalize_json_input
 from . import proxy_service as proxy_svc
 
 CHAT_SESSIONS = {}
+NODE_INPUT_CACHE = {}
 
 # Register HTTP POST route to resume chat
 @PromptServer.instance.routes.post("/chatbot-311/chat/resume")
@@ -37,23 +38,55 @@ async def resume_chat(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+# Register HTTP GET route to check paused status
+@PromptServer.instance.routes.get("/chatbot-311/chat/paused-status/{node_id}")
+async def paused_status(request):
+    try:
+        node_id = request.match_info.get("node_id", "")
+        is_paused = node_id in CHAT_SESSIONS
+        return web.json_response({"paused": is_paused})
+    except Exception as e:
+        return web.json_response({"paused": False, "error": str(e)}, status=500)
+
 LOG = logging.getLogger(__name__)
 
 def tensor_to_base64(tensor: torch.Tensor) -> str:
     """
-    Convert a ComfyUI PyTorch IMAGE tensor [B, H, W, C] to a base64 PNG data URL.
+    Convert a ComfyUI PyTorch IMAGE tensor to a base64 JPEG data URL.
+    Optimized for vision models by resizing and compressing to JPEG.
     """
     try:
+        # Handle batch dimension
         if len(tensor.shape) == 4:
             tensor = tensor[0]
             
-        array = (tensor.cpu().numpy() * 255).astype("uint8")
+        # Ensure it is a 3D tensor [H, W, C]
+        if len(tensor.shape) == 3:
+            # If shape is [C, H, W], permute to [H, W, C]
+            if tensor.shape[0] in (1, 3, 4) and tensor.shape[2] > 4:
+                tensor = tensor.permute(1, 2, 0)
+        
+        # Convert to numpy array
+        array = (tensor.detach().cpu().numpy() * 255).astype("uint8")
+        
         image = Image.fromarray(array)
         
+        # Convert to RGB mode if not already (JPEG does not support RGBA)
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+            
+        # Resize if image is too large (max 1024px in any dimension)
+        max_size = 1024
+        if max(image.size) > max_size:
+            ratio = max_size / max(image.size)
+            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+            
         buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
+        # Save as JPEG with 80% quality to reduce base64 size significantly
+        image.save(buffered, format="JPEG", quality=80)
         img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        return f"data:image/png;base64,{img_str}"
+        return f"data:image/jpeg;base64,{img_str}"
     except Exception as e:
         LOG.error("Failed to convert image tensor to base64: %s", e)
         return ""
@@ -75,6 +108,11 @@ def query_gemini_sync(history: list, model: str = None) -> str:
     upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
         cfg, body, proxypath=proxypath
     )
+    
+    # Ensure Content-Type is set to application/json so that Google's API Gateway
+    # does not interpret the raw JSON body as form-encoded query parameters.
+    headers = dict(headers)
+    headers["Content-Type"] = "application/json"
     
     req = urllib.request.Request(
         upstream,
@@ -109,6 +147,30 @@ def extract_delimited_content(text: str, start: str, end: str) -> str:
         LOG.error(f"Error extracting delimited content: {e}")
     return ""
 
+def ensure_latest_user_message_has_image(api_messages: list):
+    """
+    Ensure the latest user message has the image if present in earlier messages,
+    because Gemini's OpenAI-compatible API ignores images in past history.
+    """
+    if api_messages and api_messages[-1].get("role") == "user":
+        last_msg = api_messages[-1]
+        has_image = False
+        if isinstance(last_msg.get("content"), list):
+            has_image = any(part.get("type") == "image_url" for part in last_msg["content"])
+        
+        if not has_image:
+            found_images = []
+            for msg in reversed(api_messages[:-1]):
+                if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+                    imgs = [part for part in msg["content"] if part.get("type") == "image_url"]
+                    if imgs:
+                        found_images = imgs
+                        break
+            if found_images:
+                if isinstance(last_msg.get("content"), str):
+                    last_msg["content"] = [{"type": "text", "text": last_msg["content"]}]
+                last_msg["content"] = list(last_msg["content"]) + found_images
+
 # region Chatbot311
 class Chatbot311:
     @classmethod
@@ -133,7 +195,8 @@ class Chatbot311:
             "optional": {
                 "image": ("IMAGE",),
                 "prompt": ("STRING", {"forceInput": True, "multiline": True}),
-                "system": ("STRING", {"forceInput": True, "multiline": True}),
+                "system_general": ("STRING", {"forceInput": True, "multiline": True}),
+                "system_variable": ("STRING", {"forceInput": True, "multiline": True}),
             },
             "hidden": {
                 "node_id": "UNIQUE_ID"
@@ -174,16 +237,70 @@ class Chatbot311:
         
         image = kwargs.get("image")
         prompt = kwargs.get("prompt", "")
-        system = kwargs.get("system", "")
-        if not system or not system.strip():
-            try:
-                from pathlib import Path
-                sys_prompt_file = Path(__file__).resolve().parent.parent / "system_prompt.md"
-                if sys_prompt_file.exists():
-                    system = sys_prompt_file.read_text(encoding="utf-8")
-            except Exception as e:
-                LOG.error("Failed to load default system prompt from file: %s", e)
+        system_general = kwargs.get("system_general", "")
+        system_variable = kwargs.get("system_variable", "")
+        system_legacy = kwargs.get("system", "")
         
+        # 1. Determine the base/general system prompt
+        gen_prompt = system_general
+        if not gen_prompt or not gen_prompt.strip():
+            # Fallback to legacy system input if present, otherwise to file
+            if system_legacy and system_legacy.strip():
+                gen_prompt = system_legacy
+            else:
+                try:
+                    from pathlib import Path
+                    sys_prompt_file = Path(__file__).resolve().parent.parent / "system_prompt.md"
+                    if sys_prompt_file.exists():
+                        gen_prompt = sys_prompt_file.read_text(encoding="utf-8")
+                except Exception as e:
+                    LOG.error("Failed to load default system prompt from file: %s", e)
+
+        # 2. Combine general and variable system prompts
+        system_parts = []
+        if gen_prompt and gen_prompt.strip():
+            system_parts.append(gen_prompt.strip())
+        if system_variable and system_variable.strip():
+            system_parts.append(system_variable.strip())
+            
+        system = "\n\n".join(system_parts)
+
+        
+        # Retrieve cache for this node to survive class re-instantiation
+        node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "initialized": False})
+        cache_initialized = node_cache["initialized"]
+        last_image = node_cache["last_image"]
+        last_prompt = node_cache["last_prompt"]
+
+        # Determine if prompt or image has changed
+        prompt_str = prompt or ""
+        prompt_changed = (last_prompt != prompt_str)
+
+        image_changed = True
+        if last_image is not None and image is not None:
+            if last_image.shape == image.shape:
+                if torch.equal(last_image, image):
+                    image_changed = False
+        elif last_image is None and image is None:
+            image_changed = False
+
+        # We treat it as new input if history is empty, or if inputs actually changed.
+        # CRITICAL: If the cache was never initialized (e.g. process restart after F5)
+        # but history already exists, we just warm the cache and do NOT re-query.
+        is_really_new = False
+        if len(history) == 0:
+            is_really_new = True
+        elif not cache_initialized:
+            # Process restart: cache is empty but history exists.
+            # Warm the cache with current inputs and skip re-querying.
+            LOG.info("[Chatbot311] Cache cold after restart, warming cache (history has %d msgs). Skipping re-query.", len(history))
+            node_cache["last_image"] = image
+            node_cache["last_prompt"] = prompt_str
+            node_cache["initialized"] = True
+            is_really_new = False
+        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed):
+            is_really_new = True
+
         # Determine if we received execution inputs (prompt or image) from the workflow graph
         has_new_input = False
         user_parts = []
@@ -211,7 +328,7 @@ class Chatbot311:
                     })
                     has_new_input = True
                 
-        if has_new_input:
+        if has_new_input and is_really_new:
             if image is not None and not prompt:
                 num_imgs = len(image) if len(image.shape) == 4 else 1
                 desc_text = "Describe this image." if num_imgs <= 1 else "Describe these images."
@@ -238,6 +355,7 @@ class Chatbot311:
                             "role": msg.get("role"),
                             "content": msg.get("content")
                         })
+                    ensure_latest_user_message_has_image(api_messages)
                     
                     LOG.info(f"Querying Gemini ({model}) with system instruction...")
                     assistant_response = query_gemini_sync(api_messages, model)
@@ -254,6 +372,12 @@ class Chatbot311:
                         })
                     except Exception as e:
                         LOG.error("Failed to emit websocket update: %s", e)
+            
+            # Update cache of last processed inputs in global cache
+            node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "initialized": False})
+            node_cache["last_image"] = image
+            node_cache["last_prompt"] = prompt_str
+            node_cache["initialized"] = True
 
         # Handle Pause/Interactive mode if requested
         if actual_mode == "Interactive Chat (Pause)" and node_id:
@@ -315,6 +439,7 @@ class Chatbot311:
                             "role": msg.get("role"),
                             "content": msg.get("content")
                         })
+                    ensure_latest_user_message_has_image(api_messages)
                     
                     LOG.info(f"Querying Gemini ({model}) with system instruction in One-Shot Prompt mode (from widget)...")
                     assistant_response = query_gemini_sync(api_messages, model)

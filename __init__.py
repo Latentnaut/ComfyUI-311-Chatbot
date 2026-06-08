@@ -18,5 +18,5 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
 LOG = logging.getLogger(__name__)
 LOG.info("\033[34m*-----------------------------------------------------------*\033[0m")
-LOG.info("\033[34m*          ✨ ComfyUI-311-Chatbot Node Initialized           *\033[0m")
+LOG.info("\033[34m*          [311] ComfyUI-311-Chatbot Node Initialized        *\033[0m")
 LOG.info("\033[34m*-----------------------------------------------------------*\033[0m")
