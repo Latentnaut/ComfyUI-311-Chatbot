@@ -1225,6 +1225,18 @@ class ChatbotUI {
     const allAttachments = [...(this.pendingAttachments || []), ...(this.connectedAttachments || [])];
     
     if (!text && allAttachments.length === 0) return;
+
+    // Intercept in One-Shot Prompt mode to prevent direct browser execution
+    const modeWidget = this.node.widgets?.find(w => w && w.name === "mode");
+    const modeVal = modeWidget ? modeWidget.value : "";
+    const isOneShot = (Array.isArray(modeVal) ? modeVal[0] : modeVal) === "One-Shot Prompt";
+    
+    if (isOneShot) {
+      const bubble = this.createMessageBubble("assistant", "⚠️ **Modo One-Shot Activo:** En este modo, no debes enviar el mensaje desde el chat. Deja tu prompt escrito aquí en la caja de texto y pulsa **Queue Prompt** (Run) en ComfyUI para ejecutar todo el lienzo leyendo las imágenes y prompts de sistema conectados.");
+      this.messagesContainer.appendChild(bubble);
+      this.scrollBottom();
+      return;
+    }
     
     this.isGenerating = true;
     this.setSendButtonState(true);
