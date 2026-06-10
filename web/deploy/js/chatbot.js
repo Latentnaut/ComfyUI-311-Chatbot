@@ -1226,13 +1226,23 @@ class ChatbotUI {
     
     if (!text && allAttachments.length === 0) return;
 
-    // Intercept in One-Shot Prompt mode to prevent direct browser execution
+    // Intercept Send button in ALL modes — the chat operates via Queue Prompt (Run) only
     const modeWidget = this.node.widgets?.find(w => w && w.name === "mode");
-    const modeVal = modeWidget ? modeWidget.value : "";
-    const isOneShot = (Array.isArray(modeVal) ? modeVal[0] : modeVal) === "One-Shot Prompt";
-    
-    if (isOneShot) {
-      const bubble = this.createMessageBubble("assistant", "⚠️ **Modo One-Shot Activo:** En este modo, no debes enviar el mensaje desde el chat. Deja tu prompt escrito aquí en la caja de texto y pulsa **Queue Prompt** (Run) en ComfyUI para ejecutar todo el lienzo leyendo las imágenes y prompts de sistema conectados.");
+    const rawMode = modeWidget ? modeWidget.value : "";
+    const currentMode = Array.isArray(rawMode) ? rawMode[0] : rawMode;
+
+    if (currentMode === "Interactive Chat (Pause)") {
+      const bubble = this.createMessageBubble("assistant", "⚠️ **Interactive Chat Mode:** In this mode, press **Queue Prompt** (Run) in ComfyUI to start the workflow. When it reaches this node, it will pause and allow you to chat. Type your message and press **Confirm** to continue the workflow.");
+      this.messagesContainer.appendChild(bubble);
+      this.scrollBottom();
+      return;
+    } else if (currentMode === "One-Shot Prompt") {
+      const bubble = this.createMessageBubble("assistant", "⚠️ **One-Shot Mode:** Leave your prompt written in the text box (without sending) and press **Queue Prompt** (Run) in ComfyUI. The node will process it automatically with the connected system prompts and images, then continue the workflow.");
+      this.messagesContainer.appendChild(bubble);
+      this.scrollBottom();
+      return;
+    } else if (currentMode === "Pass Last Output (Bypass)") {
+      const bubble = this.createMessageBubble("assistant", "⚠️ **Bypass Mode:** This node simply passes through the last response without any interaction. Press **Queue Prompt** (Run) to continue the workflow.");
       this.messagesContainer.appendChild(bubble);
       this.scrollBottom();
       return;
@@ -1399,9 +1409,9 @@ class ChatbotUI {
         
         // Add custom friendly warnings for common API failures
         if (errMessage.includes("API key not valid") || errMessage.includes("valid API key") || errMessage.includes("INVALID_ARGUMENT")) {
-          errMessage = "⚠️ **Error de API Key:** Por favor, asegúrate de configurar tu API Key de Gemini correctamente en el widget `api_key` de este nodo o en el archivo `.env` del directorio `ComfyUI-311-Chatbot`.";
+          errMessage = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node or in the `.env` file inside the `ComfyUI-311-Chatbot` directory.";
         } else if (errMessage.includes("rate_limited") || errMessage.includes("429")) {
-          errMessage = "⚠️ **Límite de solicitudes superado:** Has excedido la cuota de la API. Por favor, espera un momento antes de volver a intentarlo.";
+          errMessage = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
         }
         
         throw new Error(errMessage);
@@ -1453,7 +1463,7 @@ class ChatbotUI {
     } catch (e) {
       console.error(e);
       this.showTypingIndicator(false);
-      this.addMessage("assistant", `Error: ${e.message}`);
+      this.addMessage("assistant", e.message.startsWith("⚠️") ? e.message : `Error: ${e.message}`);
       this.updateNodeValue();
     } finally {
       this.isGenerating = false;
@@ -1687,6 +1697,39 @@ app.registerExtension({
         node.chatbotWidget = widget;
         node.chatbotUI = chatbot;
         
+        // Force DOM widget wrapper to fill node width (ComfyUI V2 fix)
+        const syncWidgetWidth = () => {
+          const targetWidth = (node.size ? node.size[0] - 30 : 350);
+          if (widget.element) {
+            widget.element.style.width = "100%";
+            if (widget.element.parentElement) {
+              widget.element.parentElement.style.width = targetWidth + "px";
+            }
+          }
+          widget.width = targetWidth;
+        };
+        syncWidgetWidth();
+
+        // Setup MutationObserver to prevent ComfyUI from overriding the width on click/focus
+        let widthObserver = null;
+        if (typeof MutationObserver !== "undefined") {
+          setTimeout(() => {
+            if (widget.element && widget.element.parentElement) {
+              const parent = widget.element.parentElement;
+              const targetWidth = (widget.width || (node.size ? node.size[0] - 30 : 350)) + "px";
+              parent.style.width = targetWidth;
+              
+              widthObserver = new MutationObserver(() => {
+                const currentTargetWidth = (widget.width || (node.size ? node.size[0] - 30 : 350)) + "px";
+                if (parent.style.width !== currentTargetWidth) {
+                  parent.style.width = currentTargetWidth;
+                }
+              });
+              widthObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
+            }
+          }, 100);
+        }
+        
         if (!node.size || node.size[0] < 200 || node.size[1] < 200) {
           node.size = [380, 580];
           if (node.setSize) {
@@ -1696,6 +1739,9 @@ app.registerExtension({
         
         const onRemoved = node.onRemoved;
         node.onRemoved = function() {
+          if (widthObserver) {
+            widthObserver.disconnect();
+          }
           if (chatbot) chatbot.destroy();
           if (onRemoved) onRemoved.apply(this, arguments);
         };
@@ -1708,6 +1754,7 @@ app.registerExtension({
   async beforeRegisterNodeDef(nodeType, nodeData, app) {
     if (nodeData.name === "Chatbot311") {
       nodeType.canvasOnly = true; // Force classic canvas rendering for compatibility with Nodes 2.0
+      
       const onConnectionsChange = nodeType.prototype.onConnectionsChange;
       nodeType.prototype.onConnectionsChange = function(type, index, connected, link_info, input_info) {
         if (onConnectionsChange) {
@@ -1724,6 +1771,17 @@ app.registerExtension({
         const node = this;
         
         node.onResize = function(size) {
+          // Sync chatbot container width to node width (ComfyUI V2 fix)
+          if (node.chatbotWidget) {
+            const targetWidth = size[0] - 30;
+            node.chatbotWidget.width = targetWidth;
+            if (node.chatbotWidget.element) {
+              node.chatbotWidget.element.style.width = "100%";
+              if (node.chatbotWidget.element.parentElement) {
+                node.chatbotWidget.element.parentElement.style.width = targetWidth + "px";
+              }
+            }
+          }
           // Let ComfyUI V2 handle layout. Just redraw.
           if (node.graph) {
             node.graph.setDirtyCanvas(true, true);

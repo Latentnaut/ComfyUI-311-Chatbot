@@ -45,11 +45,9 @@ async def proxy_service(request: web.Request) -> web.Response:
             body = {}
 
         user_key = request.headers.get("X-Gemini-API-Key", "")
-        LOG.info(f"DEBUG PROXY: user_api_key present: {bool(user_key)}, length: {len(user_key)}")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
             cfg, body, proxypath=None, user_api_key=user_key
         )
-        LOG.info(f"DEBUG PROXY: upstream={upstream}, headers={ {k: ('***' if 'auth' in k.lower() or 'key' in k.lower() else v) for k, v in headers.items()} }")
 
         async with aiohttp.ClientSession() as sess:
             try:
@@ -177,11 +175,9 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
             body = {}
 
         user_key = request.headers.get("X-Gemini-API-Key", "")
-        LOG.info(f"DEBUG PROXY: user_api_key present: {bool(user_key)}, length: {len(user_key)}")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
             cfg, body, proxypath=proxypath, user_api_key=user_key
         )
-        LOG.info(f"DEBUG PROXY: upstream={upstream}, headers={ {k: ('***' if 'auth' in k.lower() or 'key' in k.lower() else v) for k, v in headers.items()} }")
 
         async with aiohttp.ClientSession() as sess:
             try:

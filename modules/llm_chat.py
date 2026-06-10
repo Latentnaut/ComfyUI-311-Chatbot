@@ -520,7 +520,7 @@ class Chatbot311:
                         has_new_input = True
                     
         if has_new_input and is_really_new:
-            if image is not None and not prompt and not has_draft:
+            if image is not None and not prompt_str and not has_draft:
                 num_imgs = len(image) if len(image.shape) == 4 else 1
                 desc_text = "Describe this image." if num_imgs <= 1 else "Describe these images."
                 user_parts.insert(0, {"type": "text", "text": desc_text})
