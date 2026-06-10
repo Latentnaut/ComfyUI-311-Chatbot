@@ -1124,9 +1124,13 @@ class ChatbotUI {
   }
   
   scrollBottom() {
+    this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
     setTimeout(() => {
       this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
-    }, 10);
+    }, 50);
+    setTimeout(() => {
+      this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+    }, 300);
   }
   
   showTypingIndicator(show) {
