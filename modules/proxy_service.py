@@ -28,18 +28,28 @@ def _read_secret(env_name: str, file_env_name: Optional[str] = None) -> Optional
 PROXY_SECRET = None
 PROXY_SECRET_HEADER = "X-Proxy-Secret"
 
-def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxypath: Optional[str]) -> Tuple[str, Dict[str, str], int, Dict[str, Any]]:
+def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxypath: Optional[str], user_api_key: Optional[str] = None) -> Tuple[str, Dict[str, str], int, Dict[str, Any]]:
     headers: Dict[str, str] = {}
     timeout = int(cfg.get("timeout", 60))
-    key = _read_secret(cfg.get("api_key_env", "GEMINI_API_KEY"))
+    
+    key = (user_api_key or "").strip()
+    if not key or key.lower() in ("undefined", "null", "none", "your_api_key_here"):
+        key = _read_secret(cfg.get("api_key_env", "GEMINI_API_KEY"))
+
+    base_url = "https://generativelanguage.googleapis.com"
+    api_token = key
+
+    # If key starts with http:// or https://, treat it as a proxy base URL
+    if key and key.startswith(("http://", "https://")):
+        base_url = key.rstrip("/")
+        api_token = "PROXY_ENCAPSULATED_TOKEN"
 
     if proxypath:
-        parts = urlsplit(cfg["endpoint"])
-        base = f"{parts.scheme}://{parts.netloc}"
-        upstream = base.rstrip("/") + "/" + proxypath.lstrip("/")
+        upstream = base_url.rstrip("/") + "/" + proxypath.lstrip("/")
     else:
         model = body.get("model") or cfg.get("default_model")
-        upstream = cfg["endpoint"].format(model=model)
+        path = "/v1beta/models/{model}:generateContent".format(model=model)
+        upstream = base_url.rstrip("/") + path
 
     forward_body = body
     if isinstance(forward_body, dict):
@@ -49,17 +59,17 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
 
     # Map OpenAI-compatible endpoints (like v1/chat/completions) to Gemini's beta openai endpoint
     if proxypath and proxypath.lstrip("/").startswith("v1/"):
-        upstream = "https://generativelanguage.googleapis.com/v1beta/openai/" + proxypath.lstrip("/")
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
+        upstream = base_url.rstrip("/") + "/v1beta/openai/" + proxypath.lstrip("/")
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
         # Strip fields not supported by Gemini's OpenAI-compatible endpoint
         if isinstance(forward_body, dict):
             for unsupported in ("frequency_penalty", "presence_penalty", "seed"):
                 forward_body.pop(unsupported, None)
     else:
         # Standard endpoint
-        if key:
-            headers[cfg.get("api_key_header", "X-goog-api-key")] = key
+        if api_token:
+            headers[cfg.get("api_key_header", "X-goog-api-key")] = api_token
 
     return upstream, headers, timeout, forward_body
 

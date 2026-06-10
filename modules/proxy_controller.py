@@ -44,12 +44,17 @@ async def proxy_service(request: web.Request) -> web.Response:
         except Exception:
             body = {}
 
-        upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(cfg, body, proxypath=None)
+        user_key = request.headers.get("X-Gemini-API-Key", "")
+        LOG.info(f"DEBUG PROXY: user_api_key present: {bool(user_key)}, length: {len(user_key)}")
+        upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
+            cfg, body, proxypath=None, user_api_key=user_key
+        )
+        LOG.info(f"DEBUG PROXY: upstream={upstream}, headers={ {k: ('***' if 'auth' in k.lower() or 'key' in k.lower() else v) for k, v in headers.items()} }")
 
         async with aiohttp.ClientSession() as sess:
             try:
                 async with sess.post(upstream, json=forward_body, headers=headers, timeout=timeout) as resp:
-                    is_streaming = bool(body.get("stream")) or upstream.endswith("/stream")
+                    is_streaming = (resp.status == 200) and (bool(body.get("stream")) or upstream.endswith("/stream"))
                     content_type = resp.headers.get("Content-Type", "")
 
                     if is_streaming:
@@ -60,22 +65,20 @@ async def proxy_service(request: web.Request) -> web.Response:
                         await sresp.prepare(request)
 
                         try:
-                            async for chunk in resp.content.iter_chunked(1024):
-                                if not chunk:
+                            async for line_bytes in resp.content:
+                                if not line_bytes:
                                     continue
                                 try:
-                                    text_chunk = chunk.decode("utf-8", errors="replace")
+                                    line_text = line_bytes.decode("utf-8")
                                 except Exception:
-                                    text_chunk = str(chunk)
+                                    line_text = line_bytes.decode("utf-8", errors="replace")
 
-                                # Forward raw SSE
-                                lines = text_chunk.splitlines()
-                                if any(l.lstrip().startswith("data:") or l.lstrip().startswith("event:") for l in lines):
-                                    raw = text_chunk
-                                    if not raw.endswith("\n\n"):
-                                        raw = raw + "\n\n"
+                                stripped = line_text.lstrip()
+                                if stripped.startswith("data:") or stripped.startswith("event:") or stripped.startswith(":"):
+                                    raw = line_text
                                 else:
-                                    raw = "".join(f"data: {l}\n" for l in lines) + "\n\n"
+                                    content = line_text.rstrip("\r\n")
+                                    raw = f"data: {content}\n\n" if content else "\n"
 
                                 try:
                                     await sresp.write(raw.encode("utf-8"))
@@ -124,12 +127,15 @@ async def proxy_service_status(request: web.Request) -> web.Response:
         ready = False
         reason = None
 
+        user_api_key = request.headers.get("X-Gemini-API-Key", "")
         api_env = cfg.get("api_key_env")
-        if api_env:
+        if user_api_key:
+            ready = True
+        elif api_env:
             key = proxy_svc._read_secret(api_env)
             ready = bool(key)
             if not ready:
-                reason = f"missing {api_env}"
+                reason = f"missing {api_env} or node api_key"
         else:
             ready = True
 
@@ -170,12 +176,21 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
         except Exception:
             body = {}
 
-        upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(cfg, body, proxypath=proxypath)
+        user_key = request.headers.get("X-Gemini-API-Key", "")
+        LOG.info(f"DEBUG PROXY: user_api_key present: {bool(user_key)}, length: {len(user_key)}")
+        upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
+            cfg, body, proxypath=proxypath, user_api_key=user_key
+        )
+        LOG.info(f"DEBUG PROXY: upstream={upstream}, headers={ {k: ('***' if 'auth' in k.lower() or 'key' in k.lower() else v) for k, v in headers.items()} }")
 
         async with aiohttp.ClientSession() as sess:
             try:
                 async with sess.post(upstream, json=forward_body, headers=headers, timeout=timeout) as resp:
-                    is_streaming = bool(body.get("stream")) or upstream.endswith("/stream") or (proxypath or "").endswith("/stream")
+                    is_streaming = (resp.status == 200) and (
+                        bool(body.get("stream")) or 
+                        upstream.endswith("/stream") or 
+                        (proxypath or "").endswith("/stream")
+                    )
                     content_type = resp.headers.get("Content-Type", "")
 
                     if is_streaming:
@@ -186,23 +201,20 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
                         await sresp.prepare(request)
 
                         try:
-                            async for chunk in resp.content.iter_chunked(1024):
-                                if not chunk:
+                            async for line_bytes in resp.content:
+                                if not line_bytes:
                                     continue
                                 try:
-                                    text_chunk = chunk.decode("utf-8", errors="replace")
+                                    line_text = line_bytes.decode("utf-8")
                                 except Exception:
-                                    text_chunk = str(chunk)
+                                    line_text = line_bytes.decode("utf-8", errors="replace")
 
-                                # Forward raw SSE
-                                lines = text_chunk.splitlines()
-                                if any(l.lstrip().startswith("data:") or l.lstrip().startswith("event:") for l in lines):
-                                    raw = text_chunk
-                                    if not raw.endswith("\n\n"):
-                                        raw = raw + "\n\n"
+                                stripped = line_text.lstrip()
+                                if stripped.startswith("data:") or stripped.startswith("event:") or stripped.startswith(":"):
+                                    raw = line_text
                                 else:
-                                    raw_sse = "".join(f"data: {l}\n" for l in lines) + "\n\n"
-                                    raw = raw_sse
+                                    content = line_text.rstrip("\r\n")
+                                    raw = f"data: {content}\n\n" if content else "\n"
 
                                 try:
                                     await sresp.write(raw.encode("utf-8"))
