@@ -1546,13 +1546,15 @@ class ChatbotUI {
     const currentVal = this.textarea.value;
     
     this.textarea.value = currentVal.slice(0, cursor) + quoteStr + currentVal.slice(cursor);
-    this.textarea.focus();
-    
-    const newCursor = cursor + quoteStr.length;
-    this.textarea.setSelectionRange(newCursor, newCursor);
     
     this.textarea.style.height = "auto";
     this.textarea.style.height = (this.textarea.scrollHeight) + "px";
+    
+    setTimeout(() => {
+      this.textarea.focus();
+      const newCursor = cursor + quoteStr.length;
+      this.textarea.setSelectionRange(newCursor, newCursor);
+    }, 20);
   }
   
   destroy() {
