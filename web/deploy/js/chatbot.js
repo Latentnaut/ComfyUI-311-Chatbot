@@ -1354,8 +1354,45 @@ class ChatbotUI {
       this.showTypingIndicator(false);
       
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || `Server responded with status ${response.status}`);
+        let errMessage = "";
+        try {
+          // Clone the response so we can read it twice if needed
+          const clonedResp = response.clone();
+          const errData = await clonedResp.json();
+          let cleanErr = null;
+          
+          if (errData && errData.result && Array.isArray(errData.result) && errData.result[0] && errData.result[0].error) {
+            cleanErr = errData.result[0].error;
+          } else if (errData && errData.error) {
+            cleanErr = errData.error;
+          } else if (errData && errData.detail) {
+            errMessage = errData.detail;
+          }
+
+          if (cleanErr && cleanErr.message) {
+            errMessage = cleanErr.message;
+            if (cleanErr.code) {
+              errMessage = `API Error (${cleanErr.code}): ${errMessage}`;
+            }
+          } else if (!errMessage) {
+            errMessage = JSON.stringify(errData);
+          }
+        } catch (parseErr) {
+          try {
+            errMessage = await response.text();
+          } catch (textErr) {
+            errMessage = `Server responded with status ${response.status}`;
+          }
+        }
+        
+        // Add custom friendly warnings for common API failures
+        if (errMessage.includes("API key not valid") || errMessage.includes("valid API key") || errMessage.includes("INVALID_ARGUMENT")) {
+          errMessage = "⚠️ **Error de API Key:** Por favor, asegúrate de configurar tu API Key de Gemini correctamente en el widget `api_key` de este nodo o en el archivo `.env` del directorio `ComfyUI-311-Chatbot`.";
+        } else if (errMessage.includes("rate_limited") || errMessage.includes("429")) {
+          errMessage = "⚠️ **Límite de solicitudes superado:** Has excedido la cuota de la API. Por favor, espera un momento antes de volver a intentarlo.";
+        }
+        
+        throw new Error(errMessage);
       }
       
       const bubble = this.createMessageBubble("assistant", "");
