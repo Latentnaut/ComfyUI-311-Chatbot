@@ -470,7 +470,7 @@
   padding: 8px 12px;
   border-radius: 14px;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.625;
   word-break: break-word;
   white-space: pre-wrap;
   position: relative;
@@ -596,13 +596,13 @@
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
   padding: 10px 12px;
-  margin: 10px 0;
+  margin: 0 !important;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-x: auto;
   font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, Monaco, monospace;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.55;
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
@@ -971,9 +971,9 @@
 .chatbot311-message-content h5, 
 .chatbot311-message-content h6 {
   margin: 14px 0 6px 0;
-  font-weight: 600;
+  font-weight: 700;
   color: #ffffff;
-  line-height: 1.35;
+  line-height: 1.4;
   letter-spacing: -0.1px;
 }
 
@@ -1015,7 +1015,7 @@
 
 .chatbot311-list-item {
   margin: 4px 0 4px 6px;
-  line-height: 1.5;
+  line-height: 1.625;
   font-size: 13px;
 }
 
@@ -1038,7 +1038,7 @@
 .chatbot311-container .chatbot311-message-content .chatbot311-list-ul li,
 .chatbot311-container .chatbot311-message-content .chatbot311-list-ol li {
   margin: 4px 0 !important;
-  line-height: 1.5 !important;
+  line-height: 1.625 !important;
   font-size: 13px !important;
   list-style-position: outside !important;
   list-style: inherit !important;
@@ -1050,12 +1050,13 @@
 .chatbot311-codeblock-container {
   position: relative;
   width: 100%;
+  margin: 6px 0;
 }
 
 .chatbot311-codeblock-copy-btn {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 10px;
+  right: 10px;
   background: rgba(30, 30, 35, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 4px;
@@ -1097,4 +1098,50 @@
   transform: scale(1.1);
   background-color: rgba(16, 185, 129, 0.15) !important;
   opacity: 1 !important;
+}
+
+/* Floating selection quote button */
+.chatbot311-floating-quote-btn {
+  position: fixed;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 15, 20, 0.95);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--cb311-border);
+  border-radius: 6px;
+  color: #a5b4fc;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  transition: transform 0.1s ease, filter 0.15s ease;
+  user-select: none;
+  box-sizing: border-box;
+  width: auto;
+  height: 28px;
+}
+
+.chatbot311-floating-quote-btn:hover {
+  filter: brightness(1.1);
+  background: rgba(25, 25, 30, 0.98);
+  color: #ffffff;
+}
+
+.chatbot311-floating-quote-btn:active {
+  transform: scale(0.95);
+}
+
+/* Quote rendering in bubble */
+.chatbot311-message-content .chatbot311-blockquote {
+  margin: 4px 0 8px 0 !important;
+  padding-left: 10px !important;
+  border-left: 2px solid var(--cb311-primary-color) !important;
+  color: var(--cb311-text-muted) !important;
+  font-style: italic !important;
+  display: block !important;
+  background: rgba(255, 255, 255, 0.01) !important;
+  font-size: 12.5px !important;
 }

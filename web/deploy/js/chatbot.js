@@ -218,6 +218,16 @@ function parseMarkdown(text, delimiters = []) {
       continue;
     }
     
+    // Blockquotes (markdown > )
+    const quoteMatch = line.match(/^\s*(?:&gt;|>)\s+(.+)$/);
+    if (quoteMatch) {
+      if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
+      if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
+      cleanTrailingNewlines();
+      processedLines.push(`<blockquote class="chatbot311-blockquote">${quoteMatch[1]}</blockquote>`);
+      continue;
+    }
+    
     // Empty line
     if (trimmed === '') {
       if (!inBulletList && !inNumberedList) {
@@ -613,6 +623,33 @@ class ChatbotUI {
       }
     };
     window.addEventListener("paste", this._globalPasteHandler);
+
+    this._selectionChangeHandler = () => {
+      const selection = window.getSelection();
+      const selectedText = selection.toString().trim();
+      
+      if (selectedText) {
+        let node = selection.anchorNode;
+        let insideAssistantMessage = false;
+        while (node) {
+          if (node.classList && node.classList.contains("chatbot311-message") && node.classList.contains("assistant")) {
+            insideAssistantMessage = true;
+            break;
+          }
+          node = node.parentNode;
+        }
+        
+        if (insideAssistantMessage) {
+          const range = selection.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          this.showFloatingQuoteButton(rect, selectedText);
+          return;
+        }
+      }
+      
+      this.hideFloatingQuoteButton();
+    };
+    document.addEventListener("selectionchange", this._selectionChangeHandler);
   }
 
   async confirmResume() {
@@ -1464,11 +1501,70 @@ class ChatbotUI {
     }
     return delimiters;
   }
+
+  showFloatingQuoteButton(rect, text) {
+    if (!this.floatingQuoteBtn) {
+      this.floatingQuoteBtn = document.createElement("button");
+      this.floatingQuoteBtn.className = "chatbot311-floating-quote-btn";
+      this.floatingQuoteBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span>Citar</span>
+      `;
+      this.floatingQuoteBtn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const activeText = this.floatingQuoteBtn.getAttribute("data-text") || text;
+        this.quoteText(activeText);
+        this.hideFloatingQuoteButton();
+        window.getSelection().removeAllRanges();
+      });
+      document.body.appendChild(this.floatingQuoteBtn);
+    }
+    
+    const btnWidth = 70;
+    const btnHeight = 28;
+    const left = rect.left + (rect.width / 2) - (btnWidth / 2) + window.scrollX;
+    const top = rect.top - btnHeight - 8 + window.scrollY;
+    
+    this.floatingQuoteBtn.style.left = `${left}px`;
+    this.floatingQuoteBtn.style.top = `${top}px`;
+    this.floatingQuoteBtn.style.display = "flex";
+    this.floatingQuoteBtn.setAttribute("data-text", text);
+  }
+  
+  hideFloatingQuoteButton() {
+    if (this.floatingQuoteBtn) {
+      this.floatingQuoteBtn.style.display = "none";
+    }
+  }
+  
+  quoteText(text) {
+    const quoteStr = `> ${text}\n\n`;
+    const cursor = this.textarea.selectionStart;
+    const currentVal = this.textarea.value;
+    
+    this.textarea.value = currentVal.slice(0, cursor) + quoteStr + currentVal.slice(cursor);
+    this.textarea.focus();
+    
+    const newCursor = cursor + quoteStr.length;
+    this.textarea.setSelectionRange(newCursor, newCursor);
+    
+    this.textarea.style.height = "auto";
+    this.textarea.style.height = (this.textarea.scrollHeight) + "px";
+  }
   
   destroy() {
     clearInterval(this.connectionCheckInterval);
     if (this._globalPasteHandler) {
       window.removeEventListener("paste", this._globalPasteHandler);
+    }
+    if (this._selectionChangeHandler) {
+      document.removeEventListener("selectionchange", this._selectionChangeHandler);
+    }
+    if (this.floatingQuoteBtn) {
+      this.floatingQuoteBtn.remove();
     }
   }
 }
