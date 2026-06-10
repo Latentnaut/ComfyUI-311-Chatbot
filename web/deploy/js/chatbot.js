@@ -581,6 +581,13 @@ class ChatbotUI {
       }
     });
 
+    api.addEventListener("chatbot311-show-typing", (event) => {
+      const { node_id, show } = event.detail;
+      if (String(node_id) === String(this.node.id)) {
+        this.showTypingIndicator(show);
+      }
+    });
+
     // Global paste handler: paste clipboard images when the node is selected
     this._globalPasteHandler = (e) => {
       const isSelected = app.canvas?.selected_nodes && app.canvas.selected_nodes[this.node.id] !== undefined;

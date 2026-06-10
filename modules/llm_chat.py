@@ -506,8 +506,26 @@ class Chatbot311:
                     ensure_latest_user_message_has_image(api_messages)
                     
                     LOG.info(f"Querying Gemini ({model}) with system instruction...")
-                    assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
-                    history.append({"role": "assistant", "content": assistant_response})
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                "node_id": node_id,
+                                "show": True
+                            })
+                        except Exception:
+                            pass
+                    try:
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
+                        history.append({"role": "assistant", "content": assistant_response})
+                    finally:
+                        if node_id:
+                            try:
+                                PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                    "node_id": node_id,
+                                    "show": False
+                                })
+                            except Exception:
+                                pass
                 except Exception as e:
                     history.append({"role": "assistant", "content": f"Execution Error: {str(e)}"})
                 
@@ -591,15 +609,26 @@ class Chatbot311:
                     ensure_latest_user_message_has_image(api_messages)
                     
                     LOG.info(f"Querying Gemini ({model}) with system instruction in One-Shot Prompt mode (from widget)...")
-                    assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
-                    history.append({"role": "assistant", "content": assistant_response})
-                    
-                    # Send websocket update back to frontend chat panel so it syncs instantly without reload
                     if node_id:
-                        PromptServer.instance.send_sync("chatbot311-update-history", {
-                            "node_id": node_id,
-                            "history": history
-                        })
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                "node_id": node_id,
+                                "show": True
+                            })
+                        except Exception:
+                            pass
+                    try:
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
+                        history.append({"role": "assistant", "content": assistant_response})
+                    finally:
+                        if node_id:
+                            try:
+                                PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                    "node_id": node_id,
+                                    "show": False
+                                })
+                            except Exception:
+                                pass
                 except Exception as e:
                     history.append({"role": "assistant", "content": f"Execution Error: {str(e)}"})
                     if node_id:
