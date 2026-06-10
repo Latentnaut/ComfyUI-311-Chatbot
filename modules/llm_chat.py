@@ -352,17 +352,26 @@ class Chatbot311:
         api_key = api_key.strip()
         
         image = kwargs.get("image")
-        prompt = kwargs.get("prompt", "")
-        system_general = kwargs.get("system_general", "")
-        system_variable = kwargs.get("system_variable", "")
-        system_legacy = kwargs.get("system", "")
+        
+        # Helper to unpack and clean string inputs from list wrappers
+        def unpack_str(val):
+            if isinstance(val, list):
+                val = val[0] if val else ""
+            if val is None:
+                return ""
+            return str(val)
+
+        prompt_str = unpack_str(kwargs.get("prompt", ""))
+        system_general_str = unpack_str(kwargs.get("system_general", ""))
+        system_variable_str = unpack_str(kwargs.get("system_variable", ""))
+        system_legacy_str = unpack_str(kwargs.get("system", ""))
         
         # 1. Determine the base/general system prompt
-        gen_prompt = system_general
+        gen_prompt = system_general_str
         if not gen_prompt or not gen_prompt.strip():
             # Fallback to legacy system input if present, otherwise to file
-            if system_legacy and system_legacy.strip():
-                gen_prompt = system_legacy
+            if system_legacy_str and system_legacy_str.strip():
+                gen_prompt = system_legacy_str
             else:
                 try:
                     from pathlib import Path
@@ -376,8 +385,8 @@ class Chatbot311:
         system_parts = []
         if gen_prompt and gen_prompt.strip():
             system_parts.append(gen_prompt.strip())
-        if system_variable and system_variable.strip():
-            system_parts.append(system_variable.strip())
+        if system_variable_str and system_variable_str.strip():
+            system_parts.append(system_variable_str.strip())
             
         # Append active output delimiters instructions
         num_delimiters = kwargs.get("number_of_delimiters", 1)
@@ -406,17 +415,26 @@ class Chatbot311:
             
         system = "\n\n".join(system_parts)
 
-        
         # Retrieve cache for this node to survive class re-instantiation
-        node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "last_seed": None, "initialized": False})
-        cache_initialized = node_cache["initialized"]
-        last_image = node_cache["last_image"]
-        last_prompt = node_cache["last_prompt"]
+        node_cache = NODE_INPUT_CACHE.setdefault(node_id, {
+            "last_image": None, 
+            "last_prompt": None, 
+            "last_seed": None, 
+            "last_system_general": None,
+            "last_system_variable": None,
+            "initialized": False
+        })
+        cache_initialized = node_cache.get("initialized", False)
+        last_image = node_cache.get("last_image")
+        last_prompt = node_cache.get("last_prompt")
         last_seed = node_cache.get("last_seed")
+        last_sys_gen = node_cache.get("last_system_general")
+        last_sys_var = node_cache.get("last_system_variable")
 
-        # Determine if prompt, image, or seed has changed
-        prompt_str = prompt or ""
+        # Determine if inputs have changed
         prompt_changed = (last_prompt != prompt_str)
+        sys_gen_changed = (last_sys_gen != system_general_str)
+        sys_var_changed = (last_sys_var != system_variable_str)
 
         image_changed = True
         if last_image is not None and image is not None:
@@ -432,8 +450,6 @@ class Chatbot311:
         seed_changed = (last_seed != seed)
 
         # We treat it as new input if history is empty, or if inputs actually changed.
-        # CRITICAL: If the cache was never initialized (e.g. process restart after F5)
-        # but history already exists, we just warm the cache and do NOT re-query.
         is_really_new = False
         if len(history) == 0:
             is_really_new = True
@@ -444,40 +460,67 @@ class Chatbot311:
             node_cache["last_image"] = image
             node_cache["last_prompt"] = prompt_str
             node_cache["last_seed"] = seed
+            node_cache["last_system_general"] = system_general_str
+            node_cache["last_system_variable"] = system_variable_str
             node_cache["initialized"] = True
             is_really_new = False
-        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed) or seed_changed:
+        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed) or seed_changed or sys_gen_changed or sys_var_changed:
             is_really_new = True
 
-        # Determine if we received execution inputs (prompt or image) from the workflow graph
+        # Determine if we received execution inputs (prompt or image) from the workflow graph or a UI draft
+        draft = ui_widget.get("draft", "").strip()
+        has_draft = bool(draft)
+        
         has_new_input = False
         user_parts = []
         
-        if prompt and prompt.strip():
-            user_parts.append({"type": "text", "text": prompt.strip()})
+        if has_draft:
+            user_parts.append({"type": "text", "text": draft})
             has_new_input = True
+            is_really_new = True
             
-        if image is not None:
-            if len(image.shape) == 4:
-                for img_slice in image:
-                    base64_image = tensor_to_base64(img_slice)
+            if image is not None:
+                if len(image.shape) == 4:
+                    for img_slice in image:
+                        base64_image = tensor_to_base64(img_slice)
+                        if base64_image:
+                            user_parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": base64_image}
+                            })
+                else:
+                    base64_image = tensor_to_base64(image)
+                    if base64_image:
+                        user_parts.append({
+                            "type": "image_url",
+                            "image_url": {"url": base64_image}
+                        })
+        else:
+            if prompt and prompt.strip():
+                user_parts.append({"type": "text", "text": prompt.strip()})
+                has_new_input = True
+                
+            if image is not None:
+                if len(image.shape) == 4:
+                    for img_slice in image:
+                        base64_image = tensor_to_base64(img_slice)
+                        if base64_image:
+                            user_parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": base64_image}
+                            })
+                            has_new_input = True
+                else:
+                    base64_image = tensor_to_base64(image)
                     if base64_image:
                         user_parts.append({
                             "type": "image_url",
                             "image_url": {"url": base64_image}
                         })
                         has_new_input = True
-            else:
-                base64_image = tensor_to_base64(image)
-                if base64_image:
-                    user_parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": base64_image}
-                    })
-                    has_new_input = True
-                
+                    
         if has_new_input and is_really_new:
-            if image is not None and not prompt:
+            if image is not None and not prompt and not has_draft:
                 num_imgs = len(image) if len(image.shape) == 4 else 1
                 desc_text = "Describe this image." if num_imgs <= 1 else "Describe these images."
                 user_parts.insert(0, {"type": "text", "text": desc_text})
@@ -534,16 +577,26 @@ class Chatbot311:
                     try:
                         PromptServer.instance.send_sync("chatbot311-update-history", {
                             "node_id": node_id,
-                            "history": history
+                            "history": history,
+                            "clear_draft": has_draft
                         })
                     except Exception as e:
                         LOG.error("Failed to emit websocket update: %s", e)
             
             # Update cache of last processed inputs in global cache
-            node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "last_seed": None, "initialized": False})
+            node_cache = NODE_INPUT_CACHE.setdefault(node_id, {
+                "last_image": None, 
+                "last_prompt": None, 
+                "last_seed": None, 
+                "last_system_general": None,
+                "last_system_variable": None,
+                "initialized": False
+            })
             node_cache["last_image"] = image
             node_cache["last_prompt"] = prompt_str
             node_cache["last_seed"] = seed
+            node_cache["last_system_general"] = system_general_str
+            node_cache["last_system_variable"] = system_variable_str
             node_cache["initialized"] = True
 
         # Handle Pause/Interactive mode if requested
@@ -690,6 +743,8 @@ class Chatbot311:
             delim_outs.append(delim_val)
 
         ui_widget["history"] = history
+        if "draft" in ui_widget:
+            ui_widget["draft"] = ""
         return (ui_widget, last_message, last_user_message, last_llm_message, all_messages) + tuple(delim_outs)
 # endregion
 

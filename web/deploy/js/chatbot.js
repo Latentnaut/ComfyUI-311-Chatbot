@@ -494,6 +494,7 @@ class ChatbotUI {
     this.textarea.addEventListener("input", () => {
       this.textarea.style.height = "auto";
       this.textarea.style.height = (this.textarea.scrollHeight) + "px";
+      this.updateNodeValue();
     });
     
     this.clearBtn.addEventListener("click", () => this.clearChat());
@@ -557,10 +558,14 @@ class ChatbotUI {
     });
     
     api.addEventListener("chatbot311-update-history", (event) => {
-      const { node_id, history } = event.detail;
+      const { node_id, history, clear_draft } = event.detail;
       if (String(node_id) === String(this.node.id)) {
         this.history = history;
         this.renderMessages();
+        if (clear_draft && this.textarea) {
+          this.textarea.value = "";
+          this.textarea.style.height = "auto";
+        }
         this.updateNodeValue();
         this.saveActiveConversation();
       }
@@ -1030,6 +1035,7 @@ class ChatbotUI {
     if (!val) return;
     let history = [];
     let config = {};
+    let draft = "";
     
     try {
       const parsed = typeof val === "string" ? JSON.parse(val) : val;
@@ -1044,6 +1050,9 @@ class ChatbotUI {
         if (parsed.chatName) {
           this.chatName = parsed.chatName;
         }
+        if (parsed.hasOwnProperty("draft")) {
+          draft = parsed.draft || "";
+        }
       }
     } catch (e) {
       console.error("Error setting widget value:", e);
@@ -1051,6 +1060,13 @@ class ChatbotUI {
     
     this.history = history;
     this.config = config;
+    if (this.textarea) {
+      this.textarea.value = draft;
+      this.textarea.style.height = "auto";
+      if (draft) {
+        this.textarea.style.height = (this.textarea.scrollHeight) + "px";
+      }
+    }
     this.renderMessages();
     this.fetchConversations();
   }
@@ -1476,7 +1492,8 @@ class ChatbotUI {
       config: this.config,
       history: this.history,
       currentChatId: this.currentChatId,
-      chatName: this.chatName
+      chatName: this.chatName,
+      draft: this.textarea ? this.textarea.value : ""
     });
     const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets[0];
     if (widget) {
@@ -1597,7 +1614,8 @@ app.registerExtension({
               history: chatbot.history,
               currentChatId: chatbot.currentChatId,
               chatName: chatbot.chatName,
-              node_id: node.id
+              node_id: node.id,
+              draft: chatbot.textarea ? chatbot.textarea.value : ""
             };
           },
           setValue(val) {
