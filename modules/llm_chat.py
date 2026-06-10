@@ -496,8 +496,8 @@ class Chatbot311:
                             "image_url": {"url": base64_image}
                         })
         else:
-            if prompt and prompt.strip():
-                user_parts.append({"type": "text", "text": prompt.strip()})
+            if prompt_str and prompt_str.strip():
+                user_parts.append({"type": "text", "text": prompt_str.strip()})
                 has_new_input = True
                 
             if image is not None:

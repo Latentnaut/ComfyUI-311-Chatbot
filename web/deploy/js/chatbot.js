@@ -405,6 +405,7 @@ class ChatbotUI {
     this.fetchDefaultSystemPrompt();
     this.fetchConversations();
     this.checkPausedStatus();
+    this.updateInputAreaVisibility();
     
     this.connectionCheckInterval = setInterval(() => this.checkConnections(), 2000);
   }
@@ -568,6 +569,7 @@ class ChatbotUI {
         }
         this.updateNodeValue();
         this.saveActiveConversation();
+        this.isGenerating = false;
       }
     });
 
@@ -602,6 +604,65 @@ class ChatbotUI {
         this.showTypingIndicator(show);
       }
     });
+
+    // Listen to ComfyUI execution events to hide the confirm banner if execution finishes or is cancelled
+    this._onExecuting = (event) => {
+      const nodeId = event.detail;
+      if (nodeId === null || String(nodeId) !== String(this.node.id)) {
+        if (this.confirmBanner) {
+          this.confirmBanner.style.display = "none";
+        }
+        this.isGenerating = false;
+      } else {
+        // Node started executing!
+        // If there is draft text in the textarea, simulate sending it
+        const text = this.textarea ? this.textarea.value.trim() : "";
+        if (text && !this.isGenerating) {
+          const allAttachments = [...(this.pendingAttachments || []), ...(this.connectedAttachments || [])];
+          let content = text;
+          if (allAttachments.length > 0) {
+            content = [];
+            content.push({ type: "text", text: text });
+            allAttachments.forEach(att => {
+              content.push({
+                type: "image_url",
+                image_url: { url: att.base64 }
+              });
+            });
+          }
+          this.history.push({ role: "user", content });
+          this.renderMessages();
+          
+          this.textarea.value = "";
+          this.textarea.style.height = "auto";
+          this.pendingAttachments = [];
+          this.fileInput.value = "";
+          this.updatePreviewBar();
+          
+          this.showTypingIndicator(true);
+          this.isGenerating = true;
+        }
+      }
+    };
+    api.addEventListener("executing", this._onExecuting);
+
+    this._onExecutionInterrupted = () => {
+      if (this.confirmBanner) {
+        this.confirmBanner.style.display = "none";
+      }
+      this.isGenerating = false;
+      this.showTypingIndicator(false);
+    };
+    api.addEventListener("execution_interrupted", this._onExecutionInterrupted);
+
+    this._onExecutionError = () => {
+      if (this.confirmBanner) {
+        this.confirmBanner.style.display = "none";
+      }
+      this.isGenerating = false;
+      this.showTypingIndicator(false);
+    };
+    api.addEventListener("execution_error", this._onExecutionError);
 
     // Global paste handler: paste clipboard images when the node is selected
     this._globalPasteHandler = (e) => {
@@ -1644,6 +1705,30 @@ class ChatbotUI {
     if (this.floatingQuoteBtn) {
       this.floatingQuoteBtn.remove();
     }
+    if (this._onExecuting) {
+      api.removeEventListener("executing", this._onExecuting);
+    }
+    if (this._onExecutionInterrupted) {
+      api.removeEventListener("execution_interrupted", this._onExecutionInterrupted);
+    }
+    if (this._onExecutionError) {
+      api.removeEventListener("execution_error", this._onExecutionError);
+    }
+  }
+
+  updateInputAreaVisibility() {
+    const modeWidget = this.node.widgets?.find(w => w && w.name === "mode");
+    const rawMode = modeWidget ? modeWidget.value : "";
+    const currentMode = Array.isArray(rawMode) ? rawMode[0] : rawMode;
+    
+    const inputArea = this.container.querySelector(".chatbot311-input-area");
+    if (inputArea) {
+      if (currentMode === "Pass Last Output (Bypass)") {
+        inputArea.style.display = "none";
+      } else {
+        inputArea.style.display = "flex";
+      }
+    }
   }
 }
 
@@ -1879,6 +1964,11 @@ app.registerExtension({
           
           // Update outputs dynamically (Autogrow)
           updateDelimiterOutputs(count);
+          
+          // 3. Chat input area visibility based on Bypass mode
+          if (node.chatbotUI) {
+            node.chatbotUI.updateInputAreaVisibility();
+          }
           
           if (node.graph) {
             node.graph.setDirtyCanvas(true, true);
