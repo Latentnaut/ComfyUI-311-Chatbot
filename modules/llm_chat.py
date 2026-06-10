@@ -91,7 +91,7 @@ def tensor_to_base64(tensor: torch.Tensor) -> str:
         LOG.error("Failed to convert image tensor to base64: %s", e)
         return ""
 
-def query_gemini_sync(history: list, model: str = None) -> str:
+def query_gemini_sync(history: list, model: str = None, api_key: str = None) -> str:
     """
     Send standard chat history list to Gemini's OpenAI-compatible completions endpoint.
     Uses urllib synchronously to avoid event loop conflicts.
@@ -106,7 +106,7 @@ def query_gemini_sync(history: list, model: str = None) -> str:
     }
     
     upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
-        cfg, body, proxypath=proxypath
+        cfg, body, proxypath=proxypath, user_api_key=api_key
     )
     
     # Ensure Content-Type is set to application/json so that Google's API Gateway
@@ -135,16 +135,117 @@ def query_gemini_sync(history: list, model: str = None) -> str:
         raise Exception(f"Failed to query Gemini API: {str(e)}")
 
 def extract_delimited_content(text: str, start: str, end: str) -> str:
-    if not text or not start or not end:
+    if not text or not start:
         return ""
-    try:
-        import re
-        pattern = re.escape(start) + r"(.*?)" + re.escape(end)
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-    except Exception as e:
-        LOG.error(f"Error extracting delimited content: {e}")
+    
+    # Try parsing as JSON first
+    trimmed = text.strip()
+    if trimmed.startswith("```"):
+        lines = trimmed.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        trimmed = "\n".join(lines).strip()
+        
+    is_json = False
+    json_data = None
+    temp_text = trimmed
+    if not temp_text.startswith("{"):
+        try:
+            import re
+            tag_match = re.match(r"^<[^>]+>\s*(\{[\s\S]*\})\s*</[^>]+>$", temp_text)
+            if tag_match:
+                temp_text = tag_match.group(1).strip()
+        except Exception:
+            pass
+            
+    if temp_text.startswith("{") and temp_text.endswith("}"):
+        try:
+            json_data = json.loads(temp_text)
+            is_json = True
+        except Exception:
+            pass
+
+    # 1. Standard regex delimiter search (checks entire text including inside JSON string values)
+    if end:
+        try:
+            import re
+            pattern = re.escape(start) + r"(.*?)" + re.escape(end)
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+        except Exception as e:
+            LOG.error(f"Error extracting delimited content: {e}")
+
+    # 2. Universal JSON fallback: if response is JSON but delimiters weren't matched
+    if is_json and json_data:
+        try:
+            clean_start = start.strip().strip('"').strip("'").strip("<").strip(">")
+            
+            # Recursive key search
+            def find_key(obj, target):
+                if isinstance(obj, dict):
+                    if target in obj:
+                        val = obj[target]
+                        return json.dumps(val, indent=2, ensure_ascii=False) if isinstance(val, (dict, list)) else str(val)
+                    for k, v in obj.items():
+                        res = find_key(v, target)
+                        if res:
+                            return res
+                elif isinstance(obj, list):
+                    for item in obj:
+                        res = find_key(item, target)
+                        if res:
+                            return res
+                return ""
+            
+            # Try finding the clean key (e.g. user set it to "reconstruction_prompt" or similar)
+            val = find_key(json_data, clean_start)
+            if val:
+                return val
+                
+            # Try finding common prompt keys (case-insensitive)
+            common_keys = ["prompt", "reconstruction_prompt", "final_prompt", "positive_prompt", "inpainting_prompt", "text", "output"]
+            for target_k in common_keys:
+                def find_key_ci(obj, target):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            if k.lower() == target:
+                                return json.dumps(v, indent=2, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+                        for k, v in obj.items():
+                            res = find_key_ci(v, target)
+                            if res:
+                                return res
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            res = find_key_ci(item, target)
+                            if res:
+                                return res
+                    return ""
+                val = find_key_ci(json_data, target_k)
+                if val:
+                    return val
+            
+            # Find the longest string value (the main prompt/output)
+            longest_str = ""
+            def find_longest_str(obj):
+                nonlocal longest_str
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        find_longest_str(v)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        find_longest_str(item)
+                elif isinstance(obj, str):
+                    if len(obj) > len(longest_str):
+                        longest_str = obj
+            find_longest_str(json_data)
+            if longest_str:
+                return longest_str
+        except Exception:
+            pass
+
     return ""
 
 def ensure_latest_user_message_has_image(api_messages: list):
@@ -191,6 +292,16 @@ class Chatbot311:
                     "max": 20,
                     "step": 1
                 }),
+                "api_key": ("STRING", {
+                    "default": "",
+                    "placeholder": "API Key or proxy URL (Optional, defaults to env)",
+                    "multiline": False
+                }),
+                "seed": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xffffffffffffffff
+                }),
             },
             "optional": {
                 "image": ("IMAGE",),
@@ -235,6 +346,11 @@ class Chatbot311:
         node_id = kwargs.get("node_id")
         node_id = str(node_id) if node_id is not None else ""
         
+        api_key = kwargs.get("api_key", "")
+        if isinstance(api_key, list):
+            api_key = api_key[0] if api_key else ""
+        api_key = api_key.strip()
+        
         image = kwargs.get("image")
         prompt = kwargs.get("prompt", "")
         system_general = kwargs.get("system_general", "")
@@ -277,12 +393,14 @@ class Chatbot311:
                 delimiters_instructions.append(f"- Delimiter {i}: Wrap the final output between '{start}' and '{end}'")
         
         if delimiters_instructions:
+            start_ex = kwargs.get('starting_delimiter_1', '<prompt_1>')
+            end_ex = kwargs.get('ending_delimiter_1', '</prompt_1>')
             delim_text = (
                 "### IMPORTANT: ACTIVE OUTPUT DELIMITERS\n"
-                "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST enclose the final clean copy-pasteable output at the very end of your response using these exact delimiters (without markdown code blocks around the delimiters themselves):\n"
+                "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST wrap the entire final output using these exact delimiters (without markdown code blocks around the delimiters themselves):\n"
                 + "\n".join(delimiters_instructions)
-                + "\n\nExample of final output format:\n"
-                + f"{kwargs.get('starting_delimiter_1', '<prompt_1>')}\n(Your generated prompt/output here)\n{kwargs.get('ending_delimiter_1', '</prompt_1>')}"
+                + f"\n\n- If your response is formatted as a JSON object, wrap the ENTIRE JSON object itself inside the delimiters. Example:\n{start_ex}\n{{\n  \"key\": \"value\"\n}}\n{end_ex}\n"
+                + f"- If your response is standard text/markdown, wrap the final prompt block inside the delimiters. Example:\n{start_ex}\nyour prompt here\n{end_ex}"
             )
             system_parts.append(delim_text)
             
@@ -290,12 +408,13 @@ class Chatbot311:
 
         
         # Retrieve cache for this node to survive class re-instantiation
-        node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "initialized": False})
+        node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "last_seed": None, "initialized": False})
         cache_initialized = node_cache["initialized"]
         last_image = node_cache["last_image"]
         last_prompt = node_cache["last_prompt"]
+        last_seed = node_cache.get("last_seed")
 
-        # Determine if prompt or image has changed
+        # Determine if prompt, image, or seed has changed
         prompt_str = prompt or ""
         prompt_changed = (last_prompt != prompt_str)
 
@@ -306,6 +425,11 @@ class Chatbot311:
                     image_changed = False
         elif last_image is None and image is None:
             image_changed = False
+
+        seed = kwargs.get("seed", 0)
+        if isinstance(seed, list):
+            seed = seed[0]
+        seed_changed = (last_seed != seed)
 
         # We treat it as new input if history is empty, or if inputs actually changed.
         # CRITICAL: If the cache was never initialized (e.g. process restart after F5)
@@ -319,9 +443,10 @@ class Chatbot311:
             LOG.info("[Chatbot311] Cache cold after restart, warming cache (history has %d msgs). Skipping re-query.", len(history))
             node_cache["last_image"] = image
             node_cache["last_prompt"] = prompt_str
+            node_cache["last_seed"] = seed
             node_cache["initialized"] = True
             is_really_new = False
-        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed):
+        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed) or seed_changed:
             is_really_new = True
 
         # Determine if we received execution inputs (prompt or image) from the workflow graph
@@ -381,7 +506,7 @@ class Chatbot311:
                     ensure_latest_user_message_has_image(api_messages)
                     
                     LOG.info(f"Querying Gemini ({model}) with system instruction...")
-                    assistant_response = query_gemini_sync(api_messages, model)
+                    assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
                     history.append({"role": "assistant", "content": assistant_response})
                 except Exception as e:
                     history.append({"role": "assistant", "content": f"Execution Error: {str(e)}"})
@@ -397,9 +522,10 @@ class Chatbot311:
                         LOG.error("Failed to emit websocket update: %s", e)
             
             # Update cache of last processed inputs in global cache
-            node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "initialized": False})
+            node_cache = NODE_INPUT_CACHE.setdefault(node_id, {"last_image": None, "last_prompt": None, "last_seed": None, "initialized": False})
             node_cache["last_image"] = image
             node_cache["last_prompt"] = prompt_str
+            node_cache["last_seed"] = seed
             node_cache["initialized"] = True
 
         # Handle Pause/Interactive mode if requested
@@ -465,7 +591,7 @@ class Chatbot311:
                     ensure_latest_user_message_has_image(api_messages)
                     
                     LOG.info(f"Querying Gemini ({model}) with system instruction in One-Shot Prompt mode (from widget)...")
-                    assistant_response = query_gemini_sync(api_messages, model)
+                    assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
                     history.append({"role": "assistant", "content": assistant_response})
                     
                     # Send websocket update back to frontend chat panel so it syncs instantly without reload

@@ -114,12 +114,8 @@ function parseMarkdown(text, delimiters = []) {
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
       
-    codeBlocks.push(`
-      <div class="chatbot311-codeblock-container">
-        <pre><code class="language-${lang}">${escapedCodeForHtml}</code></pre>
-        <button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawCode)}" title="Copy code">${copySvg}</button>
-      </div>
-    `);
+    // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
+    codeBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-${lang}">${escapedCodeForHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawCode)}" title="Copy code">${copySvg}</button></div>`);
     return id;
   });
   
@@ -133,6 +129,7 @@ function parseMarkdown(text, delimiters = []) {
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   
   // 4. Wrap custom delimiters in code blocks
+  const customDelimBlocks = [];
   if (delimiters && delimiters.length > 0) {
     delimiters.forEach(d => {
       // Escape delimiter html tags for regex matching
@@ -144,13 +141,11 @@ function parseMarkdown(text, delimiters = []) {
 
       const regex = new RegExp(escapedStartHtmlRegex + '([\\s\\S]*?)' + escapedEndHtmlRegex, 'gm');
       html = html.replace(regex, (match, content) => {
+        const id = `__CUSTOM_DELIM_${customDelimBlocks.length}__`;
         const rawContent = unescapeHtml(content.trim());
-        return `
-          <div class="chatbot311-codeblock-container">
-            <pre><code class="language-text">${escapedStartHtml}\n${content.trim()}\n${escapedEndHtml}</code></pre>
-            <button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button>
-          </div>
-        `;
+        // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
+        customDelimBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-text">${escapedStartHtml}\n${content.trim()}\n${escapedEndHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button></div>`);
+        return id;
       });
     });
   }
@@ -176,8 +171,9 @@ function parseMarkdown(text, delimiters = []) {
     const line = lines[i];
     const trimmed = line.trim();
     
-    // Skip if it's a code block placeholder
-    if (trimmed.startsWith('__CODE_BLOCK_') && trimmed.endsWith('__')) {
+    // Skip if it's a code block or custom delimiter placeholder
+    if ((trimmed.startsWith('__CODE_BLOCK_') && trimmed.endsWith('__')) ||
+        (trimmed.startsWith('__CUSTOM_DELIM_') && trimmed.endsWith('__'))) {
       if (inBulletList) { processedLines.push('</ul>'); inBulletList = false; }
       if (inNumberedList) { processedLines.push('</ol>'); inNumberedList = false; }
       cleanTrailingNewlines();
@@ -258,9 +254,29 @@ function parseMarkdown(text, delimiters = []) {
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   
-  // 7. Restore code blocks
+  // Clean up any newlines adjacent to codeblocks, headers, and lists
+  // to prevent extra visual whitespace/empty lines in pre-wrap rendering
+  html = html
+    .replace(/\n+(__CODE_BLOCK_\d+__)/g, "$1")
+    .replace(/(__CODE_BLOCK_\d+__)\n+/g, "$1")
+    .replace(/\n+(__CUSTOM_DELIM_\d+__)/g, "$1")
+    .replace(/(__CUSTOM_DELIM_\d+__)\n+/g, "$1")
+    .replace(/\n+(<h[1-6]\b)/g, "$1")
+    .replace(/(<\/h[1-6]>)\n+/g, "$1")
+    .replace(/\n+(<ul\b)/g, "$1")
+    .replace(/(<\/ul>)\n+/g, "$1")
+    .replace(/\n+(<\/ul>)/g, "$1")
+    .replace(/\n+(<ol\b)/g, "$1")
+    .replace(/(<\/ol>)\n+/g, "$1")
+    .replace(/\n+(<\/ol>)/g, "$1");
+  
+  // 7. Restore placeholders
   codeBlocks.forEach((block, idx) => {
     html = html.replace(`__CODE_BLOCK_${idx}__`, block);
+  });
+  
+  customDelimBlocks.forEach((block, idx) => {
+    html = html.replace(`__CUSTOM_DELIM_${idx}__`, block);
   });
   
   return html;
@@ -626,7 +642,14 @@ class ChatbotUI {
   
   async checkAPIStatus() {
     try {
-      const response = await fetch("/chatbot-311/proxy/gemini");
+      const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
+      const apiKey = apiKeyWidget ? (apiKeyWidget.value || "").trim() : "";
+      const headers = {};
+      if (apiKey) {
+        headers["X-Gemini-API-Key"] = apiKey;
+      }
+      
+      const response = await fetch("/chatbot-311/proxy/gemini", { headers });
       if (response.ok) {
         this.statusDot.className = "chatbot311-status-dot online";
         this.showOfflineOverlay(false);
@@ -1248,9 +1271,16 @@ class ChatbotUI {
     }
     
     try {
+      const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
+      const apiKey = apiKeyWidget ? (apiKeyWidget.value || "").trim() : "";
+      const headers = { "Content-Type": "application/json" };
+      if (apiKey) {
+        headers["X-Gemini-API-Key"] = apiKey;
+      }
+      
       const response = await fetch("/chatbot-311/proxy/gemini/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: headers,
         body: JSON.stringify({
           messages: apiMessages,
           stream: true
@@ -1550,20 +1580,16 @@ app.registerExtension({
           // 1. Sound alert visibility
           const isInteractive = modeWidget ? modeWidget.value === "Interactive Chat (Pause)" : true;
           if (soundAlertWidget) {
+            if (soundAlertWidget.type === "converted-widget") {
+              soundAlertWidget.type = soundAlertWidget.original_type || "BOOLEAN";
+            }
             if (isInteractive) {
-              if (soundAlertWidget.type === "converted-widget") {
-                soundAlertWidget.type = soundAlertWidget.original_type || "BOOLEAN";
-              }
               if (soundAlertWidget.element) {
                 soundAlertWidget.element.style.display = "";
               }
               delete soundAlertWidget.computeSize;
               delete soundAlertWidget.draw;
             } else {
-              if (soundAlertWidget.type !== "converted-widget") {
-                soundAlertWidget.original_type = soundAlertWidget.type;
-                soundAlertWidget.type = "converted-widget";
-              }
               if (soundAlertWidget.element) {
                 soundAlertWidget.element.style.display = "none";
               }
@@ -1579,20 +1605,16 @@ app.registerExtension({
             const endW = node.widgets?.find(w => w.name === `ending_delimiter_${i}`);
             
             if (startW) {
+              if (startW.type === "converted-widget") {
+                startW.type = startW.original_type || "STRING";
+              }
               if (i <= count) {
-                if (startW.type === "converted-widget") {
-                  startW.type = startW.original_type || "STRING";
-                }
                 if (startW.element) {
                   startW.element.style.display = "";
                 }
                 delete startW.computeSize;
                 delete startW.draw;
               } else {
-                if (startW.type !== "converted-widget") {
-                  startW.original_type = startW.type;
-                  startW.type = "converted-widget";
-                }
                 if (startW.element) {
                   startW.element.style.display = "none";
                 }
@@ -1602,20 +1624,16 @@ app.registerExtension({
             }
             
             if (endW) {
+              if (endW.type === "converted-widget") {
+                endW.type = endW.original_type || "STRING";
+              }
               if (i <= count) {
-                if (endW.type === "converted-widget") {
-                  endW.type = endW.original_type || "STRING";
-                }
                 if (endW.element) {
                   endW.element.style.display = "";
                 }
                 delete endW.computeSize;
                 delete endW.draw;
               } else {
-                if (endW.type !== "converted-widget") {
-                  endW.original_type = endW.type;
-                  endW.type = "converted-widget";
-                }
                 if (endW.element) {
                   endW.element.style.display = "none";
                 }
@@ -1627,10 +1645,6 @@ app.registerExtension({
           
           // Update outputs dynamically (Autogrow)
           updateDelimiterOutputs(count);
-          
-          // ComfyUI V2 handles minimum sizing via computeLayoutSize automatically.
-
-          // Manual DOM resizing removed. Sizing is controlled by computeSize and CSS height/width: 100%.
           
           if (node.graph) {
             node.graph.setDirtyCanvas(true, true);
@@ -1658,6 +1672,18 @@ app.registerExtension({
             };
           }
           
+          const apiKeyWidget = node.widgets?.find(w => w && w.name === "api_key");
+          if (apiKeyWidget) {
+            const originalCallback = apiKeyWidget.callback;
+            apiKeyWidget.callback = function() {
+              const res = originalCallback ? originalCallback.apply(this, arguments) : undefined;
+              if (node.chatbotUI) {
+                node.chatbotUI.checkAPIStatus();
+              }
+              return res;
+            };
+          }
+          
           updateNodeLayout();
 
           // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
@@ -1676,12 +1702,19 @@ app.registerExtension({
             let loadedModeVal = null;
             let loadedSoundAlertVal = null;
             let loadedNumDelimitersVal = null;
+            let loadedSeedVal = null;
+            let numberCount = 0;
             
             vals.forEach(val => {
               if (typeof val === "boolean") {
                 loadedSoundAlertVal = val;
               } else if (typeof val === "number") {
-                loadedNumDelimitersVal = val;
+                if (numberCount === 0) {
+                  loadedNumDelimitersVal = val;
+                } else {
+                  loadedSeedVal = val;
+                }
+                numberCount++;
               } else if (typeof val === "string") {
                 const trimmed = val.trim();
                 if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
@@ -1719,6 +1752,12 @@ app.registerExtension({
                 numDelimWidget.value = loadedNumDelimitersVal;
               }
             }
+            if (loadedSeedVal !== null) {
+              const seedWidget = (node.widgets || []).find(w => w && w.name === "seed");
+              if (seedWidget) {
+                seedWidget.value = loadedSeedVal;
+              }
+            }
             
             // Clean up shifted values if they got corrupted
             const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
@@ -1734,16 +1773,42 @@ app.registerExtension({
             for (let i = 1; i <= 20; i++) {
               const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
               const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
-              if (startW && (typeof startW.value !== "string" || startW.value.trim().startsWith("{") || startW.value.trim().startsWith("["))) {
-                startW.value = `<prompt_${i}>`;
+              
+              if (startW) {
+                const val = String(startW.value || "").trim();
+                if (!val || 
+                    val.startsWith("{") || 
+                    val.startsWith("[") || 
+                    val === "Interactive Chat (Pause)" || 
+                    val === "One-Shot Prompt" || 
+                    val === "Pass Last Output (Bypass)" || 
+                    val === "true" || 
+                    val === "false") {
+                  startW.value = `<prompt_${i}>`;
+                }
               }
-              if (endW && (typeof endW.value !== "string" || endW.value.trim().startsWith("{") || endW.value.trim().startsWith("["))) {
-                endW.value = `</prompt_${i}>`;
+              
+              if (endW) {
+                const val = String(endW.value || "").trim();
+                if (!val || 
+                    val.startsWith("{") || 
+                    val.startsWith("[") || 
+                    val === "Interactive Chat (Pause)" || 
+                    val === "One-Shot Prompt" || 
+                    val === "Pass Last Output (Bypass)" || 
+                    val === "true" || 
+                    val === "false") {
+                  endW.value = `</prompt_${i}>`;
+                }
               }
             }
           }
           
           updateNodeLayout();
+
+          if (node.chatbotUI) {
+            node.chatbotUI.checkAPIStatus();
+          }
 
           // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
           if (node.size && node.size[1] > 3000) {
