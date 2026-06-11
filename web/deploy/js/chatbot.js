@@ -1716,28 +1716,26 @@ class ChatbotUI {
   }
 
   reuseMessage(idx) {
-    if (confirm("Are you sure you want to reuse this message? All subsequent messages will be deleted.")) {
-      this.saveUndoState();
-      const msg = this.history[idx];
-      let text = "";
-      if (Array.isArray(msg.content)) {
-        const textPart = msg.content.find(p => p.type === "text");
-        text = textPart ? textPart.text : "";
-      } else {
-        text = msg.content || "";
-      }
-      
-      if (msg.role === "user") {
-        this.textarea.value = text;
-        this.textarea.style.height = "auto";
-        this.textarea.style.height = (this.textarea.scrollHeight) + "px";
-      }
-      
-      this.history = this.history.slice(0, idx + 1);
-      this.renderMessages();
-      this.updateNodeValue();
-      this.saveActiveConversation();
+    this.saveUndoState();
+    const msg = this.history[idx];
+    let text = "";
+    if (Array.isArray(msg.content)) {
+      const textPart = msg.content.find(p => p.type === "text");
+      text = textPart ? textPart.text : "";
+    } else {
+      text = msg.content || "";
     }
+    
+    this.textarea.value = text;
+    this.textarea.style.height = "auto";
+    this.textarea.style.height = (this.textarea.scrollHeight) + "px";
+    this.textarea.focus();
+    
+    // Slice up to idx (excluding the reused message itself and any subsequent messages)
+    this.history = this.history.slice(0, idx);
+    this.renderMessages();
+    this.updateNodeValue();
+    this.saveActiveConversation();
   }
 
   deleteMessage(idx) {
