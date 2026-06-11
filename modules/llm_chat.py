@@ -278,7 +278,7 @@ class Chatbot311:
     def INPUT_TYPES(cls):
         inputs = {
             "required": {
-                "mode": (["Interactive Chat (Pause)", "One-Shot Prompt", "Pass Last Output (Bypass)"], {
+                "mode": (["Interactive Chat (Pause)", "One-Shot Prompt", "Pass Last Output (Bypass)", "LLM Disabled (Manual)"], {
                     "default": "Interactive Chat (Pause)"
                 }),
                 "sound_alert": ("BOOLEAN", {
@@ -336,8 +336,18 @@ class Chatbot311:
         ui_widget: dict = normalize_json_input(kwargs.get("ui_widget", {}))
         history: list = normalize_json_input(ui_widget.get("history", []))
         
-        mode = kwargs.get("mode", "Interactive Chat (Pause)")
+        mode = kwargs.get("mode", "LLM Chat (Pause & Confirm)")
         actual_mode = mode[0] if isinstance(mode, list) else mode
+        
+        # Map old mode names to new ones for backward compatibility
+        if actual_mode == "Interactive Chat (Pause)":
+            actual_mode = "LLM Chat (Pause & Confirm)"
+        elif actual_mode == "One-Shot Prompt":
+            actual_mode = "LLM One-Shot (Immediate)"
+        elif actual_mode == "LLM Disabled (Manual)":
+            actual_mode = "Manual (Pause & Confirm)"
+        elif actual_mode == "Pass Last Output (Bypass)":
+            actual_mode = "Bypass (Pass Last Output)"
         
         sound_alert = kwargs.get("sound_alert", True)
         if isinstance(sound_alert, list):
@@ -531,8 +541,8 @@ class Chatbot311:
             }
             history.append(user_message)
             
-            # Query Gemini synchronously (only if NOT in Pass Last Output mode)
-            if actual_mode in ("Interactive Chat (Pause)", "One-Shot Prompt"):
+            # Query Gemini synchronously
+            if actual_mode in ("LLM Chat (Pause & Confirm)", "LLM One-Shot (Immediate)"):
                 try:
                     model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
                     
@@ -582,6 +592,39 @@ class Chatbot311:
                         })
                     except Exception as e:
                         LOG.error("Failed to emit websocket update: %s", e)
+            elif actual_mode in ("Manual (Pause & Confirm)", "Manual One-Shot (Immediate)"):
+                # Wrap the user's text in the first active delimiter
+                num_delimiters = kwargs.get("number_of_delimiters", 1)
+                if isinstance(num_delimiters, list):
+                    num_delimiters = num_delimiters[0]
+                count = int(num_delimiters)
+                start_d = "<prompt_1>"
+                end_d = "</prompt_1>"
+                if count >= 1:
+                    start_d = kwargs.get("starting_delimiter_1", "<prompt_1>")
+                    end_d = kwargs.get("ending_delimiter_1", "</prompt_1>")
+                
+                # Get the plain text from user_parts
+                user_text = ""
+                for part in user_parts:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        user_text += part.get("text", "")
+                    elif isinstance(part, str):
+                        user_text += part
+                
+                wrapped_text = f"{start_d}\n{user_text.strip()}\n{end_d}"
+                history.append({"role": "assistant", "content": wrapped_text})
+                
+                # Send websocket update back to frontend chat panel so it syncs instantly without reload
+                if node_id:
+                    try:
+                        PromptServer.instance.send_sync("chatbot311-update-history", {
+                            "node_id": node_id,
+                            "history": history,
+                            "clear_draft": has_draft
+                        })
+                    except Exception as e:
+                        LOG.error("Failed to emit websocket update: %s", e)
             
             # Update cache of last processed inputs in global cache
             node_cache = NODE_INPUT_CACHE.setdefault(node_id, {
@@ -600,7 +643,7 @@ class Chatbot311:
             node_cache["initialized"] = True
 
         # Handle Pause/Interactive mode if requested
-        if actual_mode == "Interactive Chat (Pause)" and node_id:
+        if actual_mode in ("LLM Chat (Pause & Confirm)", "Manual (Pause & Confirm)") and node_id:
             # We register the pause session
             event = Event()
             CHAT_SESSIONS[node_id] = {
@@ -644,7 +687,7 @@ class Chatbot311:
                 LOG.error(f"Error in interactive chat wait loop: {e}")
 
         # Handle One-Shot Prompt query if widget text was entered but no new graph input triggered
-        elif actual_mode == "One-Shot Prompt" and not has_new_input:
+        elif actual_mode == "LLM One-Shot (Immediate)" and not has_new_input:
             if history and history[-1].get("role") == "user":
                 try:
                     model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
@@ -661,7 +704,7 @@ class Chatbot311:
                         })
                     ensure_latest_user_message_has_image(api_messages)
                     
-                    LOG.info(f"Querying Gemini ({model}) with system instruction in One-Shot Prompt mode (from widget)...")
+                    LOG.info(f"Querying Gemini ({model}) with system instruction in LLM One-Shot (Immediate) mode (from widget)...")
                     if node_id:
                         try:
                             PromptServer.instance.send_sync("chatbot311-show-typing", {

@@ -35,6 +35,26 @@ const plusSvg = `
   </svg>
 `;
 
+const searchSvg = `
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="8"></circle>
+    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+  </svg>
+`;
+
+const chevronUpSvg = `
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="18 15 12 9 6 15"></polyline>
+  </svg>
+`;
+
+const chevronDownSvg = `
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="6 9 12 15 18 9"></polyline>
+  </svg>
+`;
+
+
 
 const sendSvg = `
   <svg class="chatbot311-send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -435,8 +455,18 @@ class ChatbotUI {
         <div class="chatbot311-header-actions">
           <button class="chatbot311-btn-undo" id="btn-undo" title="Undo" style="display: none;">${undoSvg}</button>
           <button class="chatbot311-btn-new-chat-quick" id="btn-new-chat-quick" title="New Chat">${plusSvg}</button>
+          <button class="chatbot311-btn-search" id="btn-search-toggle" title="Search">${searchSvg}</button>
           <button class="chatbot311-btn-clear" id="btn-clear" title="Clear Conversation">${trashSvg}</button>
         </div>
+      </div>
+      
+      <!-- Search Bar -->
+      <div class="chatbot311-search-bar" id="search-bar" style="display: none;">
+        <input type="text" class="chatbot311-search-input" placeholder="Search..." id="txt-search" autocomplete="off" />
+        <span class="chatbot311-search-count" id="search-count">0/0</span>
+        <button class="chatbot311-search-btn" id="btn-search-prev" title="Previous">${chevronUpSvg}</button>
+        <button class="chatbot311-search-btn" id="btn-search-next" title="Next">${chevronDownSvg}</button>
+        <button class="chatbot311-search-btn" id="btn-search-close" title="Close">${xSvg}</button>
       </div>
       
       <div class="chatbot311-messages" id="msg-container"></div>
@@ -477,6 +507,14 @@ class ChatbotUI {
     
     this.btnToggleSidebar = this.container.querySelector("#btn-toggle-sidebar");
     this.btnCloseSidebar = this.container.querySelector("#btn-close-sidebar");
+    
+    // Search elements
+    this.searchToggleBtn = this.container.querySelector("#btn-search-toggle");
+    this.searchBar = this.container.querySelector("#search-bar");
+    this.searchInput = this.container.querySelector("#txt-search");
+    this.searchPrevBtn = this.container.querySelector("#btn-search-prev");
+    this.searchNextBtn = this.container.querySelector("#btn-search-next");
+    this.searchCloseBtn = this.container.querySelector("#btn-search-close");
   }
   
   setupEventListeners() {
@@ -617,30 +655,58 @@ class ChatbotUI {
         // Node started executing!
         // If there is draft text in the textarea, simulate sending it
         const text = this.textarea ? this.textarea.value.trim() : "";
-        if (text && !this.isGenerating) {
-          const allAttachments = [...(this.pendingAttachments || []), ...(this.connectedAttachments || [])];
-          let content = text;
-          if (allAttachments.length > 0) {
-            content = [];
-            content.push({ type: "text", text: text });
-            allAttachments.forEach(att => {
-              content.push({
-                type: "image_url",
-                image_url: { url: att.base64 }
+        if (text) {
+          const modeWidget = this.node.widgets?.find(w => w && w.name === "mode");
+          const rawMode = modeWidget ? modeWidget.value : "";
+          const currentMode = Array.isArray(rawMode) ? rawMode[0] : rawMode;
+
+          if (currentMode === "Manual (Pause & Confirm)" || currentMode === "Manual One-Shot (Immediate)") {
+            const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
+            const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
+            let startD = "<prompt_1>";
+            let endD = "</prompt_1>";
+            if (count >= 1) {
+              const startW = this.node.widgets?.find(w => w && w.name === "starting_delimiter_1");
+              const endW = this.node.widgets?.find(w => w && w.name === "ending_delimiter_1");
+              if (startW && endW) {
+                startD = startW.value;
+                endD = endW.value;
+              }
+            }
+            const wrappedText = `${startD}\n${text}\n${endD}`;
+            this.history.push({ role: "assistant", content: wrappedText });
+            this.renderMessages();
+            this.textarea.value = "";
+            this.textarea.style.height = "auto";
+            this.pendingAttachments = [];
+            this.fileInput.value = "";
+            this.updatePreviewBar();
+            this.saveActiveConversation();
+          } else if (!this.isGenerating) {
+            const allAttachments = [...(this.pendingAttachments || []), ...(this.connectedAttachments || [])];
+            let content = text;
+            if (allAttachments.length > 0) {
+              content = [];
+              content.push({ type: "text", text: text });
+              allAttachments.forEach(att => {
+                content.push({
+                  type: "image_url",
+                  image_url: { url: att.base64 }
+                });
               });
-            });
+            }
+            this.history.push({ role: "user", content });
+            this.renderMessages();
+            
+            this.textarea.value = "";
+            this.textarea.style.height = "auto";
+            this.pendingAttachments = [];
+            this.fileInput.value = "";
+            this.updatePreviewBar();
+            
+            this.showTypingIndicator(true);
+            this.isGenerating = true;
           }
-          this.history.push({ role: "user", content });
-          this.renderMessages();
-          
-          this.textarea.value = "";
-          this.textarea.style.height = "auto";
-          this.pendingAttachments = [];
-          this.fileInput.value = "";
-          this.updatePreviewBar();
-          
-          this.showTypingIndicator(true);
-          this.isGenerating = true;
         }
       }
     };
@@ -716,6 +782,38 @@ class ChatbotUI {
       this.hideFloatingQuoteButton();
     };
     document.addEventListener("selectionchange", this._selectionChangeHandler);
+
+    // Search events
+    if (this.searchToggleBtn) {
+      this.searchToggleBtn.addEventListener("click", () => this.toggleSearchBar());
+    }
+    if (this.searchCloseBtn) {
+      this.searchCloseBtn.addEventListener("click", () => this.hideSearchBar());
+    }
+    if (this.searchInput) {
+      this.searchInput.addEventListener("input", (e) => {
+        this.performSearch(e.target.value);
+      });
+      this.searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (e.shiftKey) {
+            this.prevMatch();
+          } else {
+            this.nextMatch();
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          this.hideSearchBar();
+        }
+      });
+    }
+    if (this.searchPrevBtn) {
+      this.searchPrevBtn.addEventListener("click", () => this.prevMatch());
+    }
+    if (this.searchNextBtn) {
+      this.searchNextBtn.addEventListener("click", () => this.nextMatch());
+    }
   }
 
   async confirmResume() {
@@ -1149,7 +1247,11 @@ class ChatbotUI {
       this.messagesContainer.appendChild(bubble);
     });
     
-    this.scrollBottom();
+    if (this.searchBar && this.searchBar.style.display !== "none" && this.searchInput && this.searchInput.value) {
+      this.performSearch(this.searchInput.value, false);
+    } else {
+      this.scrollBottom();
+    }
   }
   
   createMessageBubble(role, content, index = null) {
@@ -1287,25 +1389,67 @@ class ChatbotUI {
     
     if (!text && allAttachments.length === 0) return;
 
-    // Intercept Send button in ALL modes — the chat operates via Queue Prompt (Run) only
+    // Intercept Send button if NOT paused — the chat operates via Queue Prompt (Run) only
     const modeWidget = this.node.widgets?.find(w => w && w.name === "mode");
     const rawMode = modeWidget ? modeWidget.value : "";
     const currentMode = Array.isArray(rawMode) ? rawMode[0] : rawMode;
+    const isPaused = this.confirmBanner && this.confirmBanner.style.display === "flex";
 
-    if (currentMode === "Interactive Chat (Pause)") {
-      const bubble = this.createMessageBubble("assistant", "⚠️ **Interactive Chat Mode:** In this mode, press **Queue Prompt** (Run) in ComfyUI to start the workflow. When it reaches this node, it will pause and allow you to chat. Type your message and press **Confirm** to continue the workflow.");
-      this.messagesContainer.appendChild(bubble);
-      this.scrollBottom();
-      return;
-    } else if (currentMode === "One-Shot Prompt") {
-      const bubble = this.createMessageBubble("assistant", "⚠️ **One-Shot Mode:** Leave your prompt written in the text box (without sending) and press **Queue Prompt** (Run) in ComfyUI. The node will process it automatically with the connected system prompts and images, then continue the workflow.");
-      this.messagesContainer.appendChild(bubble);
-      this.scrollBottom();
-      return;
-    } else if (currentMode === "Pass Last Output (Bypass)") {
-      const bubble = this.createMessageBubble("assistant", "⚠️ **Bypass Mode:** This node simply passes through the last response without any interaction. Press **Queue Prompt** (Run) to continue the workflow.");
-      this.messagesContainer.appendChild(bubble);
-      this.scrollBottom();
+    if (!isPaused) {
+      if (currentMode === "LLM Chat (Pause & Confirm)") {
+        const bubble = this.createMessageBubble("assistant", "⚠️ **Interactive Chat Mode:** In this mode, press **Queue Prompt** (Run) in ComfyUI to start the workflow. When it reaches this node, it will pause and allow you to chat. Type your message and press **Confirm** to continue the workflow.");
+        this.messagesContainer.appendChild(bubble);
+        this.scrollBottom();
+        return;
+      } else if (currentMode === "LLM One-Shot (Immediate)") {
+        const bubble = this.createMessageBubble("assistant", "⚠️ **One-Shot Mode:** Leave your prompt written in the text box (without sending) and press **Queue Prompt** (Run) in ComfyUI. The node will process it automatically with the connected system prompts and images, then continue the workflow.");
+        this.messagesContainer.appendChild(bubble);
+        this.scrollBottom();
+        return;
+      } else if (currentMode === "Bypass (Pass Last Output)") {
+        const bubble = this.createMessageBubble("assistant", "⚠️ **Bypass Mode:** This node simply passes through the last response without any interaction. Press **Queue Prompt** (Run) to continue the workflow.");
+        this.messagesContainer.appendChild(bubble);
+        this.scrollBottom();
+        return;
+      } else if (currentMode === "Manual (Pause & Confirm)") {
+        const bubble = this.createMessageBubble("assistant", "⚠️ **Manual Mode:** In this mode, press **Queue Prompt** (Run) in ComfyUI to start. The node will pause, allowing you to write your text, press **Send**, and then click **Confirm**.");
+        this.messagesContainer.appendChild(bubble);
+        this.scrollBottom();
+        return;
+      } else if (currentMode === "Manual One-Shot (Immediate)") {
+        const bubble = this.createMessageBubble("assistant", "⚠️ **Manual One-Shot Mode:** Leave your prompt written in the text box (without sending) and press **Queue Prompt** (Run) in ComfyUI. The node will wrap it in delimiters and pass it downstream immediately without pausing.");
+        this.messagesContainer.appendChild(bubble);
+        this.scrollBottom();
+        return;
+      }
+    }
+
+    if (currentMode === "Manual (Pause & Confirm)" || currentMode === "Manual One-Shot (Immediate)") {
+      // Get the first delimiter values
+      const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
+      const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
+      let startD = "<prompt_1>";
+      let endD = "</prompt_1>";
+      if (count >= 1) {
+        const startW = this.node.widgets?.find(w => w && w.name === "starting_delimiter_1");
+        const endW = this.node.widgets?.find(w => w && w.name === "ending_delimiter_1");
+        if (startW && endW) {
+          startD = startW.value;
+          endD = endW.value;
+        }
+      }
+      const wrappedText = `${startD}\n${text}\n${endD}`;
+
+      this.history.push({ role: "assistant", content: wrappedText });
+      this.renderMessages();
+
+      this.textarea.value = "";
+      this.textarea.style.height = "auto";
+      this.pendingAttachments = [];
+      this.fileInput.value = "";
+      this.updatePreviewBar();
+
+      await this.saveActiveConversation();
       return;
     }
     
@@ -1694,6 +1838,186 @@ class ChatbotUI {
     }, 20);
   }
   
+  toggleSearchBar() {
+    if (!this.searchBar) return;
+    if (this.searchBar.style.display === "none") {
+      this.showSearchBar();
+    } else {
+      this.hideSearchBar();
+    }
+  }
+
+  showSearchBar() {
+    if (!this.searchBar) return;
+    this.searchBar.style.display = "flex";
+    if (this.searchToggleBtn) {
+      this.searchToggleBtn.classList.add("active");
+    }
+    this.searchInput.focus();
+    if (this.searchInput.value) {
+      this.performSearch(this.searchInput.value);
+    }
+  }
+
+  hideSearchBar() {
+    if (!this.searchBar) return;
+    this.searchBar.style.display = "none";
+    if (this.searchToggleBtn) {
+      this.searchToggleBtn.classList.remove("active");
+    }
+    this.clearHighlights(this.messagesContainer);
+    this.searchMatches = [];
+    this.currentSearchIndex = -1;
+    this.updateSearchCount();
+  }
+
+  performSearch(query, shouldScroll = true) {
+    this.searchMatches = this.highlightText(this.messagesContainer, query);
+    
+    if (this.searchMatches.length > 0) {
+      if (this.currentSearchIndex < 0 || this.currentSearchIndex >= this.searchMatches.length) {
+        this.currentSearchIndex = 0;
+      }
+      this.showMatch(this.currentSearchIndex, shouldScroll);
+    } else {
+      this.currentSearchIndex = -1;
+      this.updateSearchCount();
+    }
+  }
+
+  showMatch(index, shouldScroll = true) {
+    if (!this.searchMatches) return;
+    this.searchMatches.forEach(m => m.classList.remove("active"));
+    
+    if (index >= 0 && index < this.searchMatches.length) {
+      const activeMatch = this.searchMatches[index];
+      activeMatch.classList.add("active");
+      
+      if (shouldScroll) {
+        activeMatch.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      
+      this.updateSearchCount();
+    }
+  }
+
+  updateSearchCount() {
+    const countEl = this.container.querySelector("#search-count");
+    if (countEl) {
+      if (this.searchMatches && this.searchMatches.length > 0) {
+        countEl.textContent = `${this.currentSearchIndex + 1}/${this.searchMatches.length}`;
+      } else {
+        countEl.textContent = "0/0";
+      }
+    }
+  }
+
+  nextMatch() {
+    if (!this.searchMatches || this.searchMatches.length === 0) return;
+    this.currentSearchIndex = (this.currentSearchIndex + 1) % this.searchMatches.length;
+    this.showMatch(this.currentSearchIndex, true);
+  }
+
+  prevMatch() {
+    if (!this.searchMatches || this.searchMatches.length === 0) return;
+    this.currentSearchIndex = (this.currentSearchIndex - 1 + this.searchMatches.length) % this.searchMatches.length;
+    this.showMatch(this.currentSearchIndex, true);
+  }
+
+  highlightText(container, query) {
+    this.clearHighlights(container);
+    
+    if (!query) return [];
+    
+    const matches = [];
+    const regex = new RegExp(this.escapeRegExp(query), "gi");
+    
+    const walk = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: (node) => {
+          let parent = node.parentNode;
+          while (parent && parent !== container) {
+            if (parent.classList && (
+              parent.classList.contains("chatbot311-msg-toolbar") || 
+              parent.classList.contains("chatbot311-codeblock-copy-btn") ||
+              parent.classList.contains("chatbot311-search-bar")
+            )) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            parent = parent.parentNode;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+    
+    const textNodes = [];
+    let currentNode;
+    while (currentNode = walk.nextNode()) {
+      textNodes.push(currentNode);
+    }
+    
+    for (let i = textNodes.length - 1; i >= 0; i--) {
+      const node = textNodes[i];
+      const text = node.nodeValue;
+      let match;
+      
+      if (regex.test(text)) {
+        regex.lastIndex = 0;
+        const fragments = [];
+        let lastIndex = 0;
+        
+        while ((match = regex.exec(text)) !== null) {
+          const matchText = match[0];
+          const matchIndex = match.index;
+          
+          if (matchIndex > lastIndex) {
+            fragments.push(document.createTextNode(text.substring(lastIndex, matchIndex)));
+          }
+          
+          const span = document.createElement("span");
+          span.className = "chatbot311-search-highlight";
+          span.textContent = matchText;
+          fragments.push(span);
+          
+          lastIndex = regex.lastIndex;
+        }
+        
+        if (lastIndex < text.length) {
+          fragments.push(document.createTextNode(text.substring(lastIndex)));
+        }
+        
+        const parent = node.parentNode;
+        if (parent) {
+          const sibling = node.nextSibling;
+          fragments.forEach(frag => {
+            parent.insertBefore(frag, sibling);
+          });
+          parent.removeChild(node);
+        }
+      }
+    }
+    
+    return Array.from(container.querySelectorAll(".chatbot311-search-highlight"));
+  }
+
+  clearHighlights(container) {
+    const highlights = container.querySelectorAll(".chatbot311-search-highlight");
+    highlights.forEach(span => {
+      const parent = span.parentNode;
+      if (parent) {
+        parent.replaceChild(document.createTextNode(span.textContent), span);
+        parent.normalize();
+      }
+    });
+  }
+
+  escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   destroy() {
     clearInterval(this.connectionCheckInterval);
     if (this._globalPasteHandler) {
@@ -1723,7 +2047,7 @@ class ChatbotUI {
     
     const inputArea = this.container.querySelector(".chatbot311-input-area");
     if (inputArea) {
-      if (currentMode === "Pass Last Output (Bypass)") {
+      if (currentMode === "Bypass (Pass Last Output)") {
         inputArea.style.display = "none";
       } else {
         inputArea.style.display = "flex";
@@ -1897,7 +2221,7 @@ app.registerExtension({
           const numDelimWidget = node.widgets?.find(w => w.name === "number_of_delimiters");
           
           // 1. Sound alert visibility
-          const isInteractive = modeWidget ? modeWidget.value === "Interactive Chat (Pause)" : true;
+          const isInteractive = modeWidget ? ["LLM Chat (Pause & Confirm)", "Manual (Pause & Confirm)"].includes(modeWidget.value) : true;
           if (soundAlertWidget) {
             if (soundAlertWidget.type === "converted-widget") {
               soundAlertWidget.type = soundAlertWidget.original_type || "BOOLEAN";
@@ -2043,7 +2367,17 @@ app.registerExtension({
                 const trimmed = val.trim();
                 if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
                   loadedHistoryVal = val;
-                } else if (["Interactive Chat (Pause)", "One-Shot Prompt", "Pass Last Output (Bypass)"].includes(val)) {
+                } else if ([
+                  "Interactive Chat (Pause)", 
+                  "One-Shot Prompt", 
+                  "Pass Last Output (Bypass)", 
+                  "LLM Disabled (Manual)",
+                  "LLM Chat (Pause & Confirm)",
+                  "LLM One-Shot (Immediate)",
+                  "Manual (Pause & Confirm)",
+                  "Manual One-Shot (Immediate)",
+                  "Bypass (Pass Last Output)"
+                ].includes(val)) {
                   loadedModeVal = val;
                 }
               }
@@ -2061,7 +2395,12 @@ app.registerExtension({
             if (loadedModeVal !== null) {
               const modeWidget = (node.widgets || []).find(w => w && w.name === "mode");
               if (modeWidget) {
-                modeWidget.value = loadedModeVal;
+                let normMode = loadedModeVal;
+                if (normMode === "Interactive Chat (Pause)") normMode = "LLM Chat (Pause & Confirm)";
+                else if (normMode === "One-Shot Prompt") normMode = "LLM One-Shot (Immediate)";
+                else if (normMode === "LLM Disabled (Manual)") normMode = "Manual (Pause & Confirm)";
+                else if (normMode === "Pass Last Output (Bypass)") normMode = "Bypass (Pass Last Output)";
+                modeWidget.value = normMode;
               }
             }
             if (loadedSoundAlertVal !== null) {
@@ -2098,14 +2437,24 @@ app.registerExtension({
               const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
               const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
               
+              const invalidDelimVals = [
+                "Interactive Chat (Pause)", 
+                "One-Shot Prompt", 
+                "Pass Last Output (Bypass)", 
+                "LLM Disabled (Manual)",
+                "LLM Chat (Pause & Confirm)",
+                "LLM One-Shot (Immediate)",
+                "Manual (Pause & Confirm)",
+                "Manual One-Shot (Immediate)",
+                "Bypass (Pass Last Output)"
+              ];
+
               if (startW) {
                 const val = String(startW.value || "").trim();
                 if (!val || 
                     val.startsWith("{") || 
                     val.startsWith("[") || 
-                    val === "Interactive Chat (Pause)" || 
-                    val === "One-Shot Prompt" || 
-                    val === "Pass Last Output (Bypass)" || 
+                    invalidDelimVals.includes(val) || 
                     val === "true" || 
                     val === "false") {
                   startW.value = `<prompt_${i}>`;
@@ -2117,9 +2466,7 @@ app.registerExtension({
                 if (!val || 
                     val.startsWith("{") || 
                     val.startsWith("[") || 
-                    val === "Interactive Chat (Pause)" || 
-                    val === "One-Shot Prompt" || 
-                    val === "Pass Last Output (Bypass)" || 
+                    invalidDelimVals.includes(val) || 
                     val === "true" || 
                     val === "false") {
                   endW.value = `</prompt_${i}>`;
