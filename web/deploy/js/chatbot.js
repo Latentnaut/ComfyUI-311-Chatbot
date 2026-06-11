@@ -845,6 +845,13 @@ class ChatbotUI {
     };
     document.addEventListener("selectionchange", this._selectionChangeHandler);
 
+    if (this.messagesContainer) {
+      this._messagesScrollHandler = () => {
+        this.hideFloatingQuoteButton();
+      };
+      this.messagesContainer.addEventListener("scroll", this._messagesScrollHandler);
+    }
+
     // Search events
     if (this.searchToggleBtn) {
       this.searchToggleBtn.addEventListener("click", () => this.toggleSearchBar());
@@ -1930,11 +1937,39 @@ class ChatbotUI {
     this.floatingQuoteBtn.style.top = `${top}px`;
     this.floatingQuoteBtn.style.display = "flex";
     this.floatingQuoteBtn.setAttribute("data-text", text);
+
+    // Save position state to detect node moving or canvas dragging/zooming
+    this._lastNodePos = [this.node.pos[0], this.node.pos[1]];
+    if (app.canvas && app.canvas.ds && app.canvas.ds.offset) {
+      this._lastCanvasOffset = [app.canvas.ds.offset[0], app.canvas.ds.offset[1]];
+      this._lastCanvasScale = app.canvas.ds.scale;
+    } else {
+      this._lastCanvasOffset = null;
+      this._lastCanvasScale = null;
+    }
   }
   
   hideFloatingQuoteButton() {
     if (this.floatingQuoteBtn) {
       this.floatingQuoteBtn.style.display = "none";
+    }
+  }
+
+  handleNodeDrawOrMove() {
+    if (this.floatingQuoteBtn && this.floatingQuoteBtn.style.display !== "none") {
+      const currentPos = this.node.pos;
+      const currentOffset = app.canvas?.ds?.offset;
+      const currentScale = app.canvas?.ds?.scale;
+      
+      if (
+        !this._lastNodePos ||
+        this._lastNodePos[0] !== currentPos[0] ||
+        this._lastNodePos[1] !== currentPos[1] ||
+        (currentOffset && (!this._lastCanvasOffset || this._lastCanvasOffset[0] !== currentOffset[0] || this._lastCanvasOffset[1] !== currentOffset[1])) ||
+        (currentScale && this._lastCanvasScale !== currentScale)
+      ) {
+        this.hideFloatingQuoteButton();
+      }
     }
   }
   
@@ -2143,6 +2178,9 @@ class ChatbotUI {
     if (this._selectionChangeHandler) {
       document.removeEventListener("selectionchange", this._selectionChangeHandler);
     }
+    if (this._messagesScrollHandler && this.messagesContainer) {
+      this.messagesContainer.removeEventListener("scroll", this._messagesScrollHandler);
+    }
     if (this.floatingQuoteBtn) {
       this.floatingQuoteBtn.remove();
     }
@@ -2295,6 +2333,15 @@ app.registerExtension({
       nodeType.prototype.onNodeCreated = function() {
         const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
         const node = this;
+
+        const originalDrawForeground = node.onDrawForeground;
+        node.onDrawForeground = function(ctx, canvas) {
+          const res = originalDrawForeground ? originalDrawForeground.apply(this, arguments) : undefined;
+          if (node.chatbotUI) {
+            node.chatbotUI.handleNodeDrawOrMove();
+          }
+          return res;
+        };
         
         node.onResize = function(size) {
           // Sync chatbot container width to node width (ComfyUI V2 fix)
