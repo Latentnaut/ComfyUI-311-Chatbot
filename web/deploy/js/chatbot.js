@@ -545,7 +545,7 @@ class ChatbotUI {
         this.textarea.style.height = "auto";
         this.textarea.style.height = (this.textarea.scrollHeight) + "px";
       }
-      this.updateNodeValue();
+      this.updateNodeValue(true);
     });
 
     // Setup input area drag-to-resize height logic
@@ -1875,7 +1875,7 @@ class ChatbotUI {
       .then(() => this.fetchConversations());
   }
   
-  updateNodeValue() {
+  updateNodeValue(skipTrigger = false) {
     const val = JSON.stringify({
       config: this.config,
       history: this.history,
@@ -1887,7 +1887,9 @@ class ChatbotUI {
     if (widget) {
       widget.value = val;
     }
-    this.node.trigger("change");
+    if (!skipTrigger) {
+      this.node.trigger("change");
+    }
   }
   
   getDelimiters() {
