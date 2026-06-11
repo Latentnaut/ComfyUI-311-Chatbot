@@ -836,7 +836,7 @@ class ChatbotUI {
         if (insideAssistantMessage) {
           const range = selection.getRangeAt(0);
           const rect = range.getBoundingClientRect();
-          this.showFloatingQuoteButton(rect, selectedText);
+          this.showFloatingQuoteButton(rect, selectedText, range);
           return;
         }
       }
@@ -847,7 +847,7 @@ class ChatbotUI {
 
     if (this.messagesContainer) {
       this._messagesScrollHandler = () => {
-        this.hideFloatingQuoteButton();
+        this.handleNodeDrawOrMove();
       };
       this.messagesContainer.addEventListener("scroll", this._messagesScrollHandler);
     }
@@ -1907,7 +1907,8 @@ class ChatbotUI {
     return delimiters;
   }
 
-  showFloatingQuoteButton(rect, text) {
+  showFloatingQuoteButton(rect, text, range) {
+    this._activeRange = range || null;
     if (!this.floatingQuoteBtn) {
       this.floatingQuoteBtn = document.createElement("button");
       this.floatingQuoteBtn.className = "chatbot311-floating-quote-btn";
@@ -1953,24 +1954,35 @@ class ChatbotUI {
     if (this.floatingQuoteBtn) {
       this.floatingQuoteBtn.style.display = "none";
     }
+    this._activeRange = null;
   }
 
   handleNodeDrawOrMove() {
-    if (this.floatingQuoteBtn && this.floatingQuoteBtn.style.display !== "none") {
-      const currentPos = this.node.pos;
-      const currentOffset = app.canvas?.ds?.offset;
-      const currentScale = app.canvas?.ds?.scale;
-      
-      if (
-        !this._lastNodePos ||
-        this._lastNodePos[0] !== currentPos[0] ||
-        this._lastNodePos[1] !== currentPos[1] ||
-        (currentOffset && (!this._lastCanvasOffset || this._lastCanvasOffset[0] !== currentOffset[0] || this._lastCanvasOffset[1] !== currentOffset[1])) ||
-        (currentScale && this._lastCanvasScale !== currentScale)
-      ) {
-        this.hideFloatingQuoteButton();
+    if (!this.floatingQuoteBtn || !this._activeRange) return;
+
+    const rect = this._activeRange.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) {
+      this.hideFloatingQuoteButton();
+      return;
+    }
+
+    // Check if the selection is scrolled out of messagesContainer's visible area
+    if (this.messagesContainer) {
+      const containerRect = this.messagesContainer.getBoundingClientRect();
+      if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) {
+        this.floatingQuoteBtn.style.display = "none";
+        return;
       }
     }
+
+    const btnWidth = 70;
+    const btnHeight = 28;
+    const left = rect.left + (rect.width / 2) - (btnWidth / 2) + window.scrollX;
+    const top = rect.top - btnHeight - 8 + window.scrollY;
+
+    this.floatingQuoteBtn.style.left = `${left}px`;
+    this.floatingQuoteBtn.style.top = `${top}px`;
+    this.floatingQuoteBtn.style.display = "flex";
   }
   
   quoteText(text) {
