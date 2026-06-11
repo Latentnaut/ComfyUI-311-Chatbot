@@ -545,6 +545,9 @@ class ChatbotUI {
         this.textarea.style.height = "auto";
         this.textarea.style.height = (this.textarea.scrollHeight) + "px";
       }
+    });
+
+    this.textarea.addEventListener("blur", () => {
       this.updateNodeValue(true);
     });
 
