@@ -44,6 +44,78 @@ async def proxy_service(request: web.Request) -> web.Response:
         except Exception:
             body = {}
 
+        use_credits = (request.headers.get("X-Use-ComfyUI-Credits", "").lower() == "true")
+        if use_credits:
+            try:
+                from .llm_chat import query_gemini_sync
+                auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
+                
+                history = body.get("messages", [])
+                if not history and body.get("prompt"):
+                    history = [{"role": "user", "content": body.get("prompt")}]
+                
+                model = body.get("model") or cfg.get("default_model", "gemini-3.5-flash")
+                
+                loop = asyncio.get_event_loop()
+                def run_sync():
+                    return query_gemini_sync(
+                        history=history,
+                        model=model,
+                        use_comfyui_credits=True,
+                        auth_token_comfy_org=auth_token
+                    )
+                
+                response_text = await loop.run_in_executor(None, run_sync)
+                
+                if body.get("stream"):
+                    sresp = web.StreamResponse(status=200, reason="OK")
+                    sresp.content_type = "text/event-stream"
+                    sresp.headers["Cache-Control"] = "no-cache"
+                    sresp.headers["Connection"] = "keep-alive"
+                    await sresp.prepare(request)
+                    
+                    chunk = {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time()),
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": response_text},
+                            "finish_reason": "stop"
+                        }]
+                    }
+                    await sresp.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
+                    await sresp.drain()
+                    await sresp.write(b"data: [DONE]\n\n")
+                    await sresp.drain()
+                    await sresp.write_eof()
+                    return sresp
+                else:
+                    completion = {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                        "object": "chat.completion",
+                        "created": int(time()),
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": response_text
+                            },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0
+                        }
+                    }
+                    return web.json_response(completion, status=200)
+            except Exception as e:
+                LOG.exception("Failed to query Gemini using ComfyUI Credits in proxy_service")
+                return web.json_response({"detail": "credits_error", "error": str(e)}, status=500)
+
         user_key = request.headers.get("X-Gemini-API-Key", "")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
             cfg, body, proxypath=None, user_api_key=user_key
@@ -127,13 +199,25 @@ async def proxy_service_status(request: web.Request) -> web.Response:
 
         user_api_key = request.headers.get("X-Gemini-API-Key", "")
         api_env = cfg.get("api_key_env")
+        auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
+        
+        comfy_org_ready = False
+        try:
+            from .llm_chat import get_comfy_org_auth
+            _, _, actual_token = get_comfy_org_auth(auth_token)
+            comfy_org_ready = bool(actual_token)
+        except Exception:
+            pass
+
         if user_api_key:
+            ready = True
+        elif comfy_org_ready:
             ready = True
         elif api_env:
             key = proxy_svc._read_secret(api_env)
             ready = bool(key)
             if not ready:
-                reason = f"missing {api_env} or node api_key"
+                reason = f"missing {api_env}, node api_key, or Comfy Org login"
         else:
             ready = True
 
@@ -173,6 +257,78 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
             body = json.loads(body_text) if body_text else {}
         except Exception:
             body = {}
+
+        use_credits = (request.headers.get("X-Use-ComfyUI-Credits", "").lower() == "true")
+        if use_credits:
+            try:
+                from .llm_chat import query_gemini_sync
+                auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
+                
+                history = body.get("messages", [])
+                if not history and body.get("prompt"):
+                    history = [{"role": "user", "content": body.get("prompt")}]
+                
+                model = body.get("model") or cfg.get("default_model", "gemini-3.5-flash")
+                
+                loop = asyncio.get_event_loop()
+                def run_sync():
+                    return query_gemini_sync(
+                        history=history,
+                        model=model,
+                        use_comfyui_credits=True,
+                        auth_token_comfy_org=auth_token
+                    )
+                
+                response_text = await loop.run_in_executor(None, run_sync)
+                
+                if body.get("stream"):
+                    sresp = web.StreamResponse(status=200, reason="OK")
+                    sresp.content_type = "text/event-stream"
+                    sresp.headers["Cache-Control"] = "no-cache"
+                    sresp.headers["Connection"] = "keep-alive"
+                    await sresp.prepare(request)
+                    
+                    chunk = {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time()),
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": response_text},
+                            "finish_reason": "stop"
+                        }]
+                    }
+                    await sresp.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
+                    await sresp.drain()
+                    await sresp.write(b"data: [DONE]\n\n")
+                    await sresp.drain()
+                    await sresp.write_eof()
+                    return sresp
+                else:
+                    completion = {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                        "object": "chat.completion",
+                        "created": int(time()),
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": response_text
+                            },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0
+                        }
+                    }
+                    return web.json_response(completion, status=200)
+            except Exception as e:
+                LOG.exception("Failed to query Gemini using ComfyUI Credits in proxy_service_with_path")
+                return web.json_response({"detail": "credits_error", "error": str(e)}, status=500)
 
         user_key = request.headers.get("X-Gemini-API-Key", "")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(

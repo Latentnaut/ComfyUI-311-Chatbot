@@ -949,6 +949,41 @@ class ChatbotUI {
         headers["X-Gemini-API-Key"] = apiKey;
       }
       
+      const useCreditsWidget = this.node.widgets?.find(w => w && w.name === "use_comfyui_credits");
+      const useCredits = useCreditsWidget ? !!useCreditsWidget.value : false;
+      if (useCredits) {
+        headers["X-Use-ComfyUI-Credits"] = "true";
+      }
+      
+      let authToken = "";
+      const authWidget = this.node.widgets?.find(w => w && w.name === "auth_token_comfy_org");
+      if (authWidget && authWidget.value) {
+        authToken = String(authWidget.value).trim();
+      }
+      if (!authToken) {
+        try {
+          const authStore = await api.getAuthStore?.();
+          if (authStore) {
+            if (typeof authStore.getAuthToken === "function") {
+              authToken = await authStore.getAuthToken();
+            } else if (typeof authStore.getIdToken === "function") {
+              authToken = await authStore.getIdToken();
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to get auth token from ComfyUI auth store:", err);
+        }
+      }
+      if (!authToken) {
+        try {
+          authToken = localStorage.getItem("comfy_org_token") || localStorage.getItem("comfy_api_key") || "";
+        } catch (e) {}
+      }
+      authToken = (authToken || "").trim();
+      if (authToken) {
+        headers["X-Comfy-Org-Auth-Token"] = authToken;
+      }
+      
       const response = await fetch("/chatbot-311/proxy/gemini", { headers });
       if (response.ok) {
         this.statusDot.className = "chatbot311-status-dot online";
@@ -1679,6 +1714,41 @@ class ChatbotUI {
       const headers = { "Content-Type": "application/json" };
       if (apiKey) {
         headers["X-Gemini-API-Key"] = apiKey;
+      }
+      
+      const useCreditsWidget = this.node.widgets?.find(w => w && w.name === "use_comfyui_credits");
+      const useCredits = useCreditsWidget ? !!useCreditsWidget.value : false;
+      if (useCredits) {
+        headers["X-Use-ComfyUI-Credits"] = "true";
+      }
+      
+      let authToken = "";
+      const authWidget = this.node.widgets?.find(w => w && w.name === "auth_token_comfy_org");
+      if (authWidget && authWidget.value) {
+        authToken = String(authWidget.value).trim();
+      }
+      if (!authToken) {
+        try {
+          const authStore = await api.getAuthStore?.();
+          if (authStore) {
+            if (typeof authStore.getAuthToken === "function") {
+              authToken = await authStore.getAuthToken();
+            } else if (typeof authStore.getIdToken === "function") {
+              authToken = await authStore.getIdToken();
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to get auth token from ComfyUI auth store:", err);
+        }
+      }
+      if (!authToken) {
+        try {
+          authToken = localStorage.getItem("comfy_org_token") || localStorage.getItem("comfy_api_key") || "";
+        } catch (e) {}
+      }
+      authToken = (authToken || "").trim();
+      if (authToken) {
+        headers["X-Comfy-Org-Auth-Token"] = authToken;
       }
       
       const response = await fetch("/chatbot-311/proxy/gemini/v1/chat/completions", {
