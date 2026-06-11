@@ -168,6 +168,12 @@ function parseMarkdown(text, delimiters = []) {
         // Highlight Image N, ImageN, Image 1, Image1, etc. in bold and blue
         highlightedContent = highlightedContent.replace(/\b(Image\s*(?:\d+|N))\b/gi, '<span class="chatbot311-delim-image">$1</span>');
         
+        // Highlight JSON keys inside prompt blocks
+        // 1. Sublevel keys (4+ spaces/tabs) -> bold white
+        highlightedContent = highlightedContent.replace(/^([ \t]{4,8})"([^"]+)"\s*:/gm, '$1"<span class="chatbot311-json-key-sub">$2</span>":');
+        // 2. First-level keys (1-3 spaces/tabs) -> bold orange
+        highlightedContent = highlightedContent.replace(/^([ \t]{1,3})"([^"]+)"\s*:/gm, '$1"<span class="chatbot311-json-key-main">$2</span>":');
+
         // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
         customDelimBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-text"><span class="chatbot311-delim-tag">${escapedStartHtml}</span>\n${highlightedContent}\n<span class="chatbot311-delim-tag">${escapedEndHtml}</span></code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button></div>`);
         return id;

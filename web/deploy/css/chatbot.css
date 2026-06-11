@@ -1253,3 +1253,20 @@
   font-weight: normal;
   opacity: 0.75;
 }
+
+/* Custom prompt block code content - force regular font weight */
+.chatbot311-codeblock-container pre code.language-text {
+  font-weight: 400 !important;
+}
+
+/* Highlight first-level JSON keys inside custom prompt blocks - bold orange */
+.chatbot311-json-key-main {
+  color: #ff9f43 !important; /* Premium vibrant orange */
+  font-weight: 600 !important;
+}
+
+/* Highlight sublevel JSON keys inside custom prompt blocks - bold white */
+.chatbot311-json-key-sub {
+  color: #ffffff !important; /* Bold white */
+  font-weight: 600 !important;
+}
