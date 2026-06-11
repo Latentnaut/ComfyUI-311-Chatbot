@@ -49,11 +49,13 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     except Exception as e:
         LOG.error("Failed to write debug_key.txt: %s", e)
         
+    import re
     if (not key or 
         key.lower() in ("undefined", "null", "none", "your_api_key_here") or 
         "optional" in key.lower() or 
         "defaults to env" in key.lower() or
-        "api key or proxy" in key.lower()):
+        "api key or proxy" in key.lower() or
+        re.match(r'^</?[a-z_]+\d*>$', key, re.IGNORECASE)):
         key = _read_secret(cfg.get("api_key_env", "GEMINI_API_KEY"))
 
     base_url = "https://generativelanguage.googleapis.com"

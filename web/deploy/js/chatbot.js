@@ -918,7 +918,8 @@ class ChatbotUI {
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
         apiKey.toLowerCase().includes("defaults to env") ||
-        apiKey.toLowerCase().includes("api key or proxy")
+        apiKey.toLowerCase().includes("api key or proxy") ||
+        /^<\/?[a-z_]+\d*>$/i.test(apiKey)
       )) {
         apiKey = "";
       }
@@ -1649,7 +1650,8 @@ class ChatbotUI {
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
         apiKey.toLowerCase().includes("defaults to env") ||
-        apiKey.toLowerCase().includes("api key or proxy")
+        apiKey.toLowerCase().includes("api key or proxy") ||
+        /^<\/?[a-z_]+\d*>$/i.test(apiKey)
       )) {
         apiKey = "";
       }
@@ -2537,6 +2539,15 @@ app.registerExtension({
               }
             }
             
+            // Clean up api_key if LiteGraph positional shift corrupted it with delimiter values
+            const apiKeyW = (node.widgets || []).find(w => w && w.name === "api_key");
+            if (apiKeyW) {
+              const akVal = String(apiKeyW.value || "").trim();
+              if (/^<\/?[a-z_]+\d*>$/i.test(akVal)) {
+                apiKeyW.value = "";
+              }
+            }
+
             // Clean up shifted values if they got corrupted
             const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
             if (numDelimWidget) {
