@@ -1240,3 +1240,9 @@
   color: #fff !important;
   box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
 }
+
+/* Highlight specific image keywords inside custom prompt blocks */
+.chatbot311-delim-image {
+  color: #60a5fa !important; /* Premium sky-blue color */
+  font-weight: 600; /* Bold weight */
+}

@@ -163,8 +163,13 @@ function parseMarkdown(text, delimiters = []) {
       html = html.replace(regex, (match, content) => {
         const id = `__CUSTOM_DELIM_${customDelimBlocks.length}__`;
         const rawContent = unescapeHtml(content.trim());
+        
+        let highlightedContent = content.trim();
+        // Highlight Image N, ImageN, Image 1, Image1, etc. in bold and blue
+        highlightedContent = highlightedContent.replace(/\b(Image\s*(?:\d+|N))\b/gi, '<span class="chatbot311-delim-image">$1</span>');
+        
         // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
-        customDelimBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-text">${escapedStartHtml}\n${content.trim()}\n${escapedEndHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button></div>`);
+        customDelimBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-text">${escapedStartHtml}\n${highlightedContent}\n${escapedEndHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button></div>`);
         return id;
       });
     });
