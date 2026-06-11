@@ -1327,9 +1327,7 @@ class ChatbotUI {
       delBtn.innerHTML = xSvg;
       delBtn.title = "Delete message";
       delBtn.addEventListener("click", () => {
-        if (confirm("Are you sure you want to delete this message?")) {
-          this.deleteMessage(index);
-        }
+        this.deleteMessage(index);
       });
       toolbar.appendChild(delBtn);
       
