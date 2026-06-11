@@ -1270,3 +1270,108 @@
   color: #ffffff !important; /* Bold white */
   font-weight: 600 !important;
 }
+
+/* Custom Confirm Modal Styles */
+.chatbot311-confirm-modal-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(10, 10, 12, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  opacity: 0;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 20px;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.chatbot311-confirm-modal-overlay.active {
+  opacity: 1;
+}
+
+.chatbot311-confirm-modal-card {
+  text-align: center;
+  color: var(--cb311-text-main);
+  width: 100%;
+  max-width: 260px;
+  background: rgba(25, 25, 30, 0.85);
+  border: 1px solid var(--cb311-border);
+  padding: 18px 16px;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  transform: scale(0.9) translateY(10px);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.chatbot311-confirm-modal-card.active {
+  transform: scale(1) translateY(0);
+}
+
+.chatbot311-confirm-modal-icon {
+  color: var(--cb311-glow-red);
+  margin-bottom: 10px;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.4));
+  display: flex;
+  justify-content: center;
+  animation: cb311-pulse 2s infinite ease-in-out;
+}
+
+.chatbot311-confirm-modal-content p {
+  font-size: 12.5px;
+  color: var(--cb311-text-main);
+  line-height: 1.45;
+  margin: 0 0 16px 0;
+  font-weight: 500;
+}
+
+.chatbot311-confirm-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.chatbot311-confirm-modal-btn {
+  border: none;
+  padding: 6px 16px;
+  border-radius: 14px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 11px;
+  transition: transform 0.1s ease, filter 0.15s ease;
+  width: 50%;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.chatbot311-confirm-modal-btn.cancel {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--cb311-text-muted);
+}
+
+.chatbot311-confirm-modal-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--cb311-text-main);
+}
+
+.chatbot311-confirm-modal-btn.confirm {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: #ffffff;
+  box-shadow: 0 3px 8px rgba(239, 68, 68, 0.25);
+}
+
+.chatbot311-confirm-modal-btn.confirm:hover {
+  filter: brightness(1.1);
+}
+
+.chatbot311-confirm-modal-btn:active {
+  transform: scale(0.95);
+}
+

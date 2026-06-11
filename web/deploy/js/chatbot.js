@@ -105,6 +105,15 @@ const editPenSvg = `
   </svg>
 `;
 
+const warningSvg = `
+  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+    <line x1="12" y1="9" x2="12" y2="13"></line>
+    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+  </svg>
+`;
+
+
 // Inject CSS stylesheet dynamically
 const link = document.createElement("link");
 link.rel = "stylesheet";
@@ -899,6 +908,54 @@ class ChatbotUI {
     }
   }
 
+  showConfirmDialog(message) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "chatbot311-confirm-modal-overlay";
+      overlay.innerHTML = `
+        <div class="chatbot311-confirm-modal-card">
+          <div class="chatbot311-confirm-modal-icon">
+            ${warningSvg}
+          </div>
+          <div class="chatbot311-confirm-modal-content">
+            <p>${message}</p>
+          </div>
+          <div class="chatbot311-confirm-modal-actions">
+            <button class="chatbot311-confirm-modal-btn cancel" id="confirm-modal-btn-cancel">Cancel</button>
+            <button class="chatbot311-confirm-modal-btn confirm" id="confirm-modal-btn-confirm">Confirm</button>
+          </div>
+        </div>
+      `;
+      
+      this.container.appendChild(overlay);
+      
+      const card = overlay.querySelector(".chatbot311-confirm-modal-card");
+      
+      requestAnimationFrame(() => {
+        overlay.classList.add("active");
+        card.classList.add("active");
+      });
+      
+      const cleanUp = (result) => {
+        overlay.classList.remove("active");
+        card.classList.remove("active");
+        setTimeout(() => {
+          overlay.remove();
+          resolve(result);
+        }, 200);
+      };
+      
+      overlay.querySelector("#confirm-modal-btn-confirm").addEventListener("click", () => cleanUp(true));
+      overlay.querySelector("#confirm-modal-btn-cancel").addEventListener("click", () => cleanUp(false));
+      
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) {
+          cleanUp(false);
+        }
+      });
+    });
+  }
+
   async confirmResume() {
     if (!this.confirmBtn) return;
     this.confirmBtn.disabled = true;
@@ -1147,7 +1204,8 @@ class ChatbotUI {
   
   async deleteConversation(id, event) {
     event.stopPropagation();
-    if (!confirm("Are you sure you want to delete this conversation?")) return;
+    const confirmed = await this.showConfirmDialog("Are you sure you want to delete this conversation?");
+    if (!confirmed) return;
     
     try {
       const response = await fetch(`/chatbot-311/conversations/${id}`, {
@@ -1945,9 +2003,10 @@ class ChatbotUI {
     this.triggerUndoHint();
   }
   
-  clearChat() {
+  async clearChat() {
     if (this.history.length === 0) return;
-    if (!confirm("Are you sure you want to clear this conversation?")) return;
+    const confirmed = await this.showConfirmDialog("Are you sure you want to clear this conversation?");
+    if (!confirmed) return;
     
     this.saveUndoState();
     this.history = [];
