@@ -1219,9 +1219,10 @@ class ChatbotUI {
           const item = document.createElement("div");
           item.className = "chatbot311-preview-item";
           item.innerHTML = `
-            <div class="chatbot311-preview-thumb" style="background-image: url('${att.base64}');" title="${att.filename} (Upload)">
+            <div class="chatbot311-preview-thumb" style="background-image: url('${att.base64}');">
               <button class="chatbot311-preview-remove" data-id="${att.id}">✕</button>
             </div>
+            <span class="chatbot311-preview-name">${att.filename} (Upload)</span>
           `;
           
           const removeBtn = item.querySelector(".chatbot311-preview-remove");
@@ -1239,7 +1240,8 @@ class ChatbotUI {
           const item = document.createElement("div");
           item.className = "chatbot311-preview-item";
           item.innerHTML = `
-            <div class="chatbot311-preview-thumb" style="background-image: url('${att.base64}');" title="${att.filename} (Graph)"></div>
+            <div class="chatbot311-preview-thumb" style="background-image: url('${att.base64}');"></div>
+            <span class="chatbot311-preview-name">${att.filename} (Graph)</span>
           `;
           this.previewBar.appendChild(item);
         });

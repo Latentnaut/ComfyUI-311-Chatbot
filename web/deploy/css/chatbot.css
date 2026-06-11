@@ -245,6 +245,11 @@
   background-color: rgba(99, 102, 241, 0.08);
 }
 
+.chatbot311-btn-undo.highlight-pulse {
+  color: var(--cb311-primary-color) !important;
+  background-color: rgba(99, 102, 241, 0.08);
+}
+
 /* Sidebar Conversation Manager */
 .chatbot311-sidebar {
   position: absolute;
@@ -713,7 +718,7 @@
 /* Input Area Redesign - Compact Capsule Style */
 .chatbot311-input-area {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   padding: 6px 10px;
   background: rgba(255, 255, 255, 0.02);
@@ -721,7 +726,24 @@
   border-radius: 20px;
   margin: 10px 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  transition: border-color 0.2s ease, border-top-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chatbot311-input-resizer {
+  position: absolute;
+  top: -6px;
+  left: 12px;
+  right: 12px;
+  height: 12px;
+  cursor: ns-resize;
+  z-index: 10;
+}
+
+.chatbot311-input-area:has(.chatbot311-input-resizer:hover),
+.chatbot311-input-area.resizing {
+  border-top-color: var(--cb311-primary-color) !important;
+  box-shadow: 0 -2px 8px rgba(99, 102, 241, 0.15), 0 4px 16px rgba(0, 0, 0, 0.2);
 }
 
 .chatbot311-input-area:focus-within {
@@ -740,7 +762,7 @@
   align-items: center;
   justify-content: center;
   transition: color 0.15s ease, background-color 0.15s ease;
-  margin-bottom: 2px;
+  margin-bottom: 0;
 }
 
 .chatbot311-control-btn svg {
@@ -766,7 +788,7 @@
   font-family: inherit;
   font-size: 13px;
   resize: none;
-  min-height: 22px;
+  min-height: 56px;
   max-height: 120px;
   line-height: 1.4;
   box-sizing: border-box;
