@@ -2541,18 +2541,37 @@ app.registerExtension({
             let loadedHistoryVal = null;
             let loadedModeVal = null;
             let loadedSoundAlertVal = null;
+            let loadedUseCreditsVal = null;
             let loadedNumDelimitersVal = null;
             let loadedSeedVal = null;
+            
+            const booleanCount = vals.filter(v => typeof v === "boolean").length;
+            const isNewFormat = booleanCount >= 2;
+            
+            let boolCount = 0;
             let numberCount = 0;
             
             vals.forEach(val => {
               if (typeof val === "boolean") {
-                loadedSoundAlertVal = val;
-              } else if (typeof val === "number") {
-                if (numberCount === 0) {
-                  loadedNumDelimitersVal = val;
+                if (boolCount === 0) {
+                  loadedSoundAlertVal = val;
                 } else {
-                  loadedSeedVal = val;
+                  loadedUseCreditsVal = val;
+                }
+                boolCount++;
+              } else if (typeof val === "number") {
+                if (isNewFormat) {
+                  if (numberCount === 0) {
+                    loadedSeedVal = val;
+                  } else {
+                    loadedNumDelimitersVal = val;
+                  }
+                } else {
+                  if (numberCount === 0) {
+                    loadedNumDelimitersVal = val;
+                  } else {
+                    loadedSeedVal = val;
+                  }
                 }
                 numberCount++;
               } else if (typeof val === "string") {
@@ -2599,6 +2618,12 @@ app.registerExtension({
               const soundAlertWidget = (node.widgets || []).find(w => w && w.name === "sound_alert");
               if (soundAlertWidget) {
                 soundAlertWidget.value = loadedSoundAlertVal;
+              }
+            }
+            if (loadedUseCreditsVal !== null) {
+              const useCreditsWidget = (node.widgets || []).find(w => w && w.name === "use_comfyui_credits");
+              if (useCreditsWidget) {
+                useCreditsWidget.value = loadedUseCreditsVal;
               }
             }
             if (loadedNumDelimitersVal !== null) {

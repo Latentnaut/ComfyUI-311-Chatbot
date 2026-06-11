@@ -91,11 +91,197 @@ def tensor_to_base64(tensor: torch.Tensor) -> str:
         LOG.error("Failed to convert image tensor to base64: %s", e)
         return ""
 
-def query_gemini_sync(history: list, model: str = None, api_key: str = None) -> str:
+def get_comfy_org_auth(hidden_token=None):
+    """Attempts to get ComfyUI Org authentication token."""
+    try:
+        from comfy_api_nodes.util._helpers import default_base_url
+        comfy_api_base = default_base_url()
+    except ImportError:
+        comfy_api_base = "https://api.comfy.org"
+        
+    auth_header = {}
+    auth_token = hidden_token
+    if isinstance(auth_token, list):
+        auth_token = auth_token[0] if auth_token else ""
+    
+    if not auth_token:
+        try:
+            from comfy.cli_args import args
+            auth_token = getattr(args, "api_key_comfy_org", None)
+        except ImportError:
+            pass
+            
+    if not auth_token:
+        auth_token = os.environ.get("COMFY_API_TOKEN") or os.environ.get("COMFY_ORG_API_KEY")
+
+    if auth_token:
+        auth_header["Authorization"] = f"Bearer {auth_token}"
+        auth_header["X-API-KEY"] = auth_token
+        
+    return comfy_api_base, auth_header, auth_token
+
+def query_gemini_sync(history: list, model: str = None, api_key: str = None, use_comfyui_credits: bool = True, auth_token_comfy_org: str = "") -> str:
     """
-    Send standard chat history list to Gemini's OpenAI-compatible completions endpoint.
-    Uses urllib synchronously to avoid event loop conflicts.
+    Send standard chat history list to Gemini's OpenAI-compatible completions endpoint
+    or to official ComfyUI API using ComfyUI Credits.
+    Uses urllib or sync_op synchronously to avoid event loop conflicts.
     """
+    if use_comfyui_credits:
+        try:
+            comfy_api_base, auth_headers, actual_token = get_comfy_org_auth(auth_token_comfy_org)
+            if not actual_token:
+                LOG.warning("ComfyUI Credits enabled but no token found. Falling back to custom keys...")
+            else:
+                LOG.info("🪙 Using ComfyUI Credits to query Gemini chatbot...")
+                
+                # Import necessary comfy_api_nodes modules dynamically to ensure they are available
+                from comfy_api_nodes.util import sync_op, ApiEndpoint
+                from comfy_api_nodes.apis.gemini import (
+                    GeminiContent,
+                    GeminiGenerateContentRequest,
+                    GeminiGenerateContentResponse,
+                    GeminiPart,
+                    GeminiRole,
+                    GeminiSystemInstructionContent,
+                    GeminiTextPart,
+                    GeminiInlineData,
+                    GeminiMimeType,
+                )
+                
+                import threading
+                
+                thread_res = []
+                thread_err = []
+                
+                def _run_async_credits():
+                     import asyncio
+                     import platform
+                     import logging
+                     
+                     logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+                     
+                     if platform.system() == 'Windows':
+                         try:
+                             from asyncio import WindowsProactorEventLoopPolicy
+                             asyncio.set_event_loop_policy(WindowsProactorEventLoopPolicy())
+                         except ImportError:
+                             pass
+                             
+                     new_loop = asyncio.new_event_loop()
+                     asyncio.set_event_loop(new_loop)
+                     
+                     if hasattr(new_loop, 'set_exception_handler'):
+                         def silence_connection_reset(loop, context):
+                             if "exception" in context:
+                                 exc = context["exception"]
+                                 if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+                                     return
+                             loop.default_exception_handler(context)
+                         new_loop.set_exception_handler(silence_connection_reset)
+                         
+                     try:
+                         # Prepare the GeminiGenerateContentRequest data
+                         system_instr = None
+                         filtered_contents = []
+                         
+                         for msg in history:
+                             role_str = msg.get("role")
+                             content_val = msg.get("content")
+                             
+                             if role_str == "system":
+                                 system_text = content_val
+                                 if isinstance(system_text, list):
+                                     system_text = " ".join(part.get("text", "") for part in system_text if part.get("type") == "text")
+                                 system_instr = GeminiSystemInstructionContent(parts=[GeminiTextPart(text=str(system_text).strip())], role=None)
+                                 continue
+                                 
+                             role_val = GeminiRole.user if role_str == "user" else GeminiRole.model
+                             parts = []
+                             
+                             if isinstance(content_val, list):
+                                 for part in content_val:
+                                     if part.get("type") == "text":
+                                         parts.append(GeminiPart(text=part.get("text")))
+                                     elif part.get("type") == "image_url":
+                                         url = part.get("image_url", {}).get("url", "")
+                                         if "," in url:
+                                             header, data_b64 = url.split(",", 1)
+                                             mime_type = GeminiMimeType.image_jpeg
+                                             if "png" in header:
+                                                 mime_type = GeminiMimeType.image_png
+                                             elif "webp" in header:
+                                                 mime_type = GeminiMimeType.image_webp
+                                             parts.append(GeminiPart(inlineData=GeminiInlineData(data=data_b64, mimeType=mime_type)))
+                             else:
+                                 parts.append(GeminiPart(text=str(content_val)))
+                                 
+                             filtered_contents.append(GeminiContent(role=role_val, parts=parts))
+                             
+                         class DummyNode:
+                             class DummyHidden:
+                                 pass
+                             hidden = DummyHidden()
+                         
+                         DummyNode.hidden.auth_token_comfy_org = actual_token
+                         DummyNode.hidden.api_key_comfy_org = actual_token
+                         DummyNode.hidden.unique_id = "Chatbot311_Generated_Node"
+                         
+                         actual_model = model or "gemini-3.5-flash"
+                         if actual_model == "gemini-3-pro-preview":
+                             actual_model = "gemini-3.1-pro-preview"
+                         elif actual_model == "gemini-3-1-pro":
+                             actual_model = "gemini-3.1-pro-preview"
+                         elif actual_model == "gemini-3-1-flash-lite":
+                             actual_model = "gemini-3.1-flash-lite-preview"
+                         
+                         result = new_loop.run_until_complete(
+                             asyncio.wait_for(
+                                 sync_op(
+                                     DummyNode,
+                                     endpoint=ApiEndpoint(path=f"/proxy/vertexai/gemini/{actual_model}", method="POST"),
+                                     data=GeminiGenerateContentRequest(
+                                         contents=filtered_contents,
+                                         systemInstruction=system_instr,
+                                     ),
+                                     response_model=GeminiGenerateContentResponse,
+                                 ),
+                                 timeout=60.0
+                             )
+                         )
+                         
+                         if result and result.candidates:
+                             parts = []
+                             for candidate in result.candidates:
+                                 if candidate.content and candidate.content.parts:
+                                     for part in candidate.content.parts:
+                                         if part.text:
+                                             parts.append(part.text)
+                             output_text = "\n".join(parts)
+                             thread_res.append(output_text or "Empty response from Gemini model...")
+                         else:
+                             thread_res.append("Empty response from Gemini model...")
+                     except Exception as exc:
+                         thread_err.append(exc)
+                     finally:
+                         try:
+                             new_loop.run_until_complete(new_loop.shutdown_asyncgens())
+                             if hasattr(new_loop, "shutdown_default_executor"):
+                                 new_loop.run_until_complete(new_loop.shutdown_default_executor())
+                         except:
+                             pass
+                         new_loop.close()
+                         
+                t = threading.Thread(target=_run_async_credits)
+                t.start()
+                t.join()
+                
+                if thread_err:
+                     raise thread_err[0]
+                     
+                return thread_res[0]
+        except Exception as e:
+            LOG.warning("ComfyUI Credits failed. Reason: %s. Falling back to custom keys...", e)
+
     cfg = proxy_svc.SERVICES.get("gemini", {})
     proxypath = "v1/chat/completions"
     
@@ -303,12 +489,6 @@ class Chatbot311:
                     "label_on": "On",
                     "label_off": "Off"
                 }),
-                "number_of_delimiters": ("INT", {
-                    "default": 1,
-                    "min": 1,
-                    "max": 20,
-                    "step": 1
-                }),
                 "api_key": ("STRING", {
                     "default": "",
                     "placeholder": "API Key or proxy URL (Optional, defaults to env)",
@@ -319,6 +499,12 @@ class Chatbot311:
                     "min": 0,
                     "max": 0xffffffffffffffff
                 }),
+                "number_of_delimiters": ("INT", {
+                    "default": 1,
+                    "min": 1,
+                    "max": 20,
+                    "step": 1
+                }),
             },
             "optional": {
                 "image": ("IMAGE",),
@@ -327,12 +513,18 @@ class Chatbot311:
                 "system_variable": ("STRING", {"forceInput": True, "multiline": True}),
             },
             "hidden": {
-                "node_id": "UNIQUE_ID"
+                "node_id": "UNIQUE_ID",
+                "auth_token_comfy_org": "AUTH_TOKEN_COMFY_ORG",
             }
         }
         for i in range(1, 21):
             inputs["required"][f"starting_delimiter_{i}"] = ("STRING", {"default": f"<prompt_{i}>"})
             inputs["required"][f"ending_delimiter_{i}"] = ("STRING", {"default": f"</prompt_{i}>"})
+        inputs["required"]["use_comfyui_credits"] = ("BOOLEAN", {
+            "default": True,
+            "label_on": "Use ComfyUI Credits",
+            "label_off": "Use Custom API Keys"
+        })
         inputs["required"]["ui_widget"] = (Input.CHAT_311, {"default": {}})
         return inputs
 
@@ -377,6 +569,14 @@ class Chatbot311:
         if isinstance(api_key, list):
             api_key = api_key[0] if api_key else ""
         api_key = api_key.strip()
+        
+        use_comfyui_credits = kwargs.get("use_comfyui_credits", True)
+        if isinstance(use_comfyui_credits, list):
+            use_comfyui_credits = use_comfyui_credits[0] if use_comfyui_credits else True
+            
+        auth_token_comfy_org = kwargs.get("auth_token_comfy_org", "")
+        if isinstance(auth_token_comfy_org, list):
+            auth_token_comfy_org = auth_token_comfy_org[0] if auth_token_comfy_org else ""
         
         image = kwargs.get("image")
         
@@ -588,7 +788,7 @@ class Chatbot311:
                         except Exception:
                             pass
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org)
                         history.append({"role": "assistant", "content": assistant_response})
                     finally:
                         if node_id:
@@ -734,7 +934,7 @@ class Chatbot311:
                         except Exception:
                             pass
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key)
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org)
                         history.append({"role": "assistant", "content": assistant_response})
                     finally:
                         if node_id:
