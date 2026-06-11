@@ -18,6 +18,27 @@ from . import proxy_service as proxy_svc
 CHAT_SESSIONS = {}
 NODE_INPUT_CACHE = {}
 
+# Module-level cache for ComfyUI Org auth token.
+# Populated when a workflow execution provides a valid token via the hidden input.
+# Used by sidebar proxy requests that can't obtain the token from the frontend.
+_CACHED_COMFY_ORG_TOKEN = None
+
+def _on_prompt_intercept_token(json_data):
+    """Intercept auth tokens from prompt queue requests to cache for sidebar use."""
+    global _CACHED_COMFY_ORG_TOKEN
+    try:
+        extra_data = json_data.get("extra_data", {})
+        token = extra_data.get("auth_token_comfy_org") or extra_data.get("api_key_comfy_org")
+        if token:
+            _CACHED_COMFY_ORG_TOKEN = token
+            LOG.debug("Cached ComfyUI Org auth token from prompt queue request.")
+    except Exception:
+        pass
+    return json_data
+
+PromptServer.instance.add_on_prompt_handler(_on_prompt_intercept_token)
+
+
 # Register HTTP POST route to resume chat
 @PromptServer.instance.routes.post("/chatbot-311/chat/resume")
 async def resume_chat(request):
@@ -93,6 +114,7 @@ def tensor_to_base64(tensor: torch.Tensor) -> str:
 
 def get_comfy_org_auth(hidden_token=None):
     """Attempts to get ComfyUI Org authentication token."""
+    global _CACHED_COMFY_ORG_TOKEN
     try:
         from comfy_api_nodes.util._helpers import default_base_url
         comfy_api_base = default_base_url()
@@ -110,11 +132,18 @@ def get_comfy_org_auth(hidden_token=None):
             auth_token = getattr(args, "api_key_comfy_org", None)
         except ImportError:
             pass
+
+    # Fallback: use cached token from a previous workflow execution
+    if not auth_token and _CACHED_COMFY_ORG_TOKEN:
+        auth_token = _CACHED_COMFY_ORG_TOKEN
+        LOG.debug("Using cached ComfyUI Org auth token from prior workflow execution.")
             
     if not auth_token:
         auth_token = os.environ.get("COMFY_API_TOKEN") or os.environ.get("COMFY_ORG_API_KEY")
 
     if auth_token:
+        # Update cache with valid token
+        _CACHED_COMFY_ORG_TOKEN = auth_token
         auth_header["Authorization"] = f"Bearer {auth_token}"
         auth_header["X-API-KEY"] = auth_token
         
@@ -577,6 +606,12 @@ class Chatbot311:
         auth_token_comfy_org = kwargs.get("auth_token_comfy_org", "")
         if isinstance(auth_token_comfy_org, list):
             auth_token_comfy_org = auth_token_comfy_org[0] if auth_token_comfy_org else ""
+        
+        # Cache the token for sidebar proxy requests
+        if auth_token_comfy_org:
+            global _CACHED_COMFY_ORG_TOKEN
+            _CACHED_COMFY_ORG_TOKEN = auth_token_comfy_org
+            LOG.debug("Cached ComfyUI Org auth token from workflow execution.")
         
         image = kwargs.get("image")
         

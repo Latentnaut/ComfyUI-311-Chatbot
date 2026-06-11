@@ -98,6 +98,39 @@ const checkSvg = `
   </svg>
 `;
 
+async function getFirebaseIndexedDBToken() {
+    return new Promise((resolve) => {
+        try {
+            const request = indexedDB.open("firebaseLocalStorageDb");
+            request.onsuccess = (event) => {
+                const db = event.target.result;
+                try {
+                    const transaction = db.transaction(["firebaseLocalStorage"], "readonly");
+                    const store = transaction.objectStore("firebaseLocalStorage");
+                    const getAllRequest = store.getAll();
+                    getAllRequest.onsuccess = () => {
+                        const records = getAllRequest.result;
+                        for (const record of records || []) {
+                            if (record && record.value && record.value.stsTokenManager && record.value.stsTokenManager.accessToken) {
+                                resolve(record.value.stsTokenManager.accessToken);
+                                return;
+                            }
+                        }
+                        resolve(null);
+                    };
+                    getAllRequest.onerror = () => resolve(null);
+                } catch (e) {
+                    resolve(null);
+                }
+            };
+            request.onerror = () => resolve(null);
+        } catch (e) {
+            resolve(null);
+        }
+    });
+}
+
+
 const editPenSvg = `
   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M12 20h9"></path>
@@ -1017,6 +1050,13 @@ class ChatbotUI {
       if (authWidget && authWidget.value) {
         authToken = String(authWidget.value).trim();
       }
+      // Primary fallback: use the same properties ComfyUI frontend uses in queuePrompt
+      if (!authToken && api.authToken) {
+        authToken = api.authToken;
+      }
+      if (!authToken && api.apiKey) {
+        authToken = api.apiKey;
+      }
       if (!authToken) {
         try {
           const authStore = await api.getAuthStore?.();
@@ -1035,6 +1075,9 @@ class ChatbotUI {
         try {
           authToken = localStorage.getItem("comfy_org_token") || localStorage.getItem("comfy_api_key") || "";
         } catch (e) {}
+      }
+      if (!authToken) {
+        authToken = await getFirebaseIndexedDBToken() || "";
       }
       authToken = (authToken || "").trim();
       if (authToken) {
@@ -1785,6 +1828,13 @@ class ChatbotUI {
       if (authWidget && authWidget.value) {
         authToken = String(authWidget.value).trim();
       }
+      // Primary fallback: use the same properties ComfyUI frontend uses in queuePrompt
+      if (!authToken && api.authToken) {
+        authToken = api.authToken;
+      }
+      if (!authToken && api.apiKey) {
+        authToken = api.apiKey;
+      }
       if (!authToken) {
         try {
           const authStore = await api.getAuthStore?.();
@@ -1803,6 +1853,9 @@ class ChatbotUI {
         try {
           authToken = localStorage.getItem("comfy_org_token") || localStorage.getItem("comfy_api_key") || "";
         } catch (e) {}
+      }
+      if (!authToken) {
+        authToken = await getFirebaseIndexedDBToken() || "";
       }
       authToken = (authToken || "").trim();
       if (authToken) {
