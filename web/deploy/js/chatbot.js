@@ -913,7 +913,15 @@ class ChatbotUI {
   async checkAPIStatus() {
     try {
       const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
-      const apiKey = apiKeyWidget ? (apiKeyWidget.value || "").trim() : "";
+      let apiKey = apiKeyWidget ? (apiKeyWidget.value || "").trim() : "";
+      if (apiKey && (
+        apiKey.toLowerCase() === "your_api_key_here" || 
+        apiKey.toLowerCase().includes("optional") || 
+        apiKey.toLowerCase().includes("defaults to env") ||
+        apiKey.toLowerCase().includes("api key or proxy")
+      )) {
+        apiKey = "";
+      }
       const headers = {};
       if (apiKey) {
         headers["X-Gemini-API-Key"] = apiKey;
@@ -1636,7 +1644,15 @@ class ChatbotUI {
     
     try {
       const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
-      const apiKey = apiKeyWidget ? (apiKeyWidget.value || "").trim() : "";
+      let apiKey = apiKeyWidget ? (apiKeyWidget.value || "").trim() : "";
+      if (apiKey && (
+        apiKey.toLowerCase() === "your_api_key_here" || 
+        apiKey.toLowerCase().includes("optional") || 
+        apiKey.toLowerCase().includes("defaults to env") ||
+        apiKey.toLowerCase().includes("api key or proxy")
+      )) {
+        apiKey = "";
+      }
       const headers = { "Content-Type": "application/json" };
       if (apiKey) {
         headers["X-Gemini-API-Key"] = apiKey;

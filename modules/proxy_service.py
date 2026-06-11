@@ -33,7 +33,27 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     timeout = int(cfg.get("timeout", 60))
     
     key = (user_api_key or "").strip()
-    if not key or key.lower() in ("undefined", "null", "none", "your_api_key_here"):
+    
+    # Debug logging
+    env_key = os.environ.get("GEMINI_API_KEY")
+    try:
+        from pathlib import Path
+        log_file = Path(__file__).resolve().parent.parent / "debug_key.txt"
+        log_file.write_text(
+            f"user_api_key: {repr(user_api_key)}\n"
+            f"env_api_key: {repr(env_key)}\n"
+            f"key_after_strip: {repr(key)}\n",
+            encoding="utf-8"
+        )
+        LOG.info(f"[Chatbot311 Debug] user_api_key={repr(user_api_key)}, env_api_key={repr(env_key)}, key_after_strip={repr(key)}")
+    except Exception as e:
+        LOG.error("Failed to write debug_key.txt: %s", e)
+        
+    if (not key or 
+        key.lower() in ("undefined", "null", "none", "your_api_key_here") or 
+        "optional" in key.lower() or 
+        "defaults to env" in key.lower() or
+        "api key or proxy" in key.lower()):
         key = _read_secret(cfg.get("api_key_env", "GEMINI_API_KEY"))
 
     base_url = "https://generativelanguage.googleapis.com"

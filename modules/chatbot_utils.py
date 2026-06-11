@@ -33,8 +33,10 @@ def maybe_load_dotenv(path: Path) -> None:
             k, v = line.split("=", 1)
             k = k.strip()
             v = v.strip().strip('"').strip("'")
-            if k and os.environ.get(k) is None:
-                os.environ[k] = v
+            if k:
+                curr = os.environ.get(k)
+                if curr is None or curr.strip() == "" or curr.lower() in ("your_api_key_here", "undefined", "null", "none"):
+                    os.environ[k] = v
     except Exception:
         _LOG.exception("failed to load .env at %s", path)
 # endregion
