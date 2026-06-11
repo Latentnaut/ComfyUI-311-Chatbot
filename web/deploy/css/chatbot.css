@@ -1246,3 +1246,10 @@
   color: #60a5fa !important; /* Premium sky-blue color */
   font-weight: 600; /* Bold weight */
 }
+
+/* Dimmed styling for delimiter tag markers like <prompt_1> */
+.chatbot311-delim-tag {
+  color: #64748b !important; /* Dimmed slate-gray */
+  font-weight: normal;
+  opacity: 0.75;
+}

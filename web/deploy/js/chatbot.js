@@ -169,7 +169,7 @@ function parseMarkdown(text, delimiters = []) {
         highlightedContent = highlightedContent.replace(/\b(Image\s*(?:\d+|N))\b/gi, '<span class="chatbot311-delim-image">$1</span>');
         
         // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
-        customDelimBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-text">${escapedStartHtml}\n${highlightedContent}\n${escapedEndHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button></div>`);
+        customDelimBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-text"><span class="chatbot311-delim-tag">${escapedStartHtml}</span>\n${highlightedContent}\n<span class="chatbot311-delim-tag">${escapedEndHtml}</span></code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawContent)}" title="Copy prompt only (without tags)">${copySvg}</button></div>`);
         return id;
       });
     });
