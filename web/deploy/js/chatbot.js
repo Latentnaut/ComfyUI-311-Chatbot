@@ -1557,6 +1557,19 @@ class ChatbotUI {
           }
         }
       }
+
+      // Strip image_url from all older user messages in apiMessages to avoid payload bloat
+      for (let i = 0; i < apiMessages.length - 1; i++) {
+        const msg = apiMessages[i];
+        if (msg.role === "user" && Array.isArray(msg.content)) {
+          const cleanContent = msg.content.filter(part => part.type !== "image_url");
+          if (cleanContent.length === 1 && cleanContent[0].type === "text") {
+            msg.content = cleanContent[0].text;
+          } else {
+            msg.content = cleanContent;
+          }
+        }
+      }
     }
     
     try {
@@ -1611,7 +1624,7 @@ class ChatbotUI {
         }
         
         // Add custom friendly warnings for common API failures
-        if (errMessage.includes("API key not valid") || errMessage.includes("valid API key") || errMessage.includes("INVALID_ARGUMENT")) {
+        if (errMessage.includes("API key not valid") || errMessage.includes("valid API key")) {
           errMessage = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node or in the `.env` file inside the `ComfyUI-311-Chatbot` directory.";
         } else if (errMessage.includes("rate_limited") || errMessage.includes("429")) {
           errMessage = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";

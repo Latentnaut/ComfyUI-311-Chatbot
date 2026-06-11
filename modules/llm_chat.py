@@ -252,13 +252,19 @@ def ensure_latest_user_message_has_image(api_messages: list):
     """
     Ensure the latest user message has the image if present in earlier messages,
     because Gemini's OpenAI-compatible API ignores images in past history.
+    Also strip image_url blocks from all older history messages to avoid payload bloat.
     """
-    if api_messages and api_messages[-1].get("role") == "user":
-        last_msg = api_messages[-1]
+    if not api_messages:
+        return
+
+    # 1. If the last message is a user message, check if it already has an image.
+    last_msg = api_messages[-1]
+    if last_msg.get("role") == "user":
         has_image = False
         if isinstance(last_msg.get("content"), list):
             has_image = any(part.get("type") == "image_url" for part in last_msg["content"])
         
+        # 2. If it doesn't have an image, find the most recent image in history.
         if not has_image:
             found_images = []
             for msg in reversed(api_messages[:-1]):
@@ -271,6 +277,17 @@ def ensure_latest_user_message_has_image(api_messages: list):
                 if isinstance(last_msg.get("content"), str):
                     last_msg["content"] = [{"type": "text", "text": last_msg["content"]}]
                 last_msg["content"] = list(last_msg["content"]) + found_images
+
+    # 3. Strip image_url from all user messages except the very last one.
+    for msg in api_messages[:-1]:
+        if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+            new_content = [part for part in msg["content"] if part.get("type") != "image_url"]
+            if len(new_content) == 1 and new_content[0].get("type") == "text":
+                msg["content"] = new_content[0].get("text", "")
+            elif len(new_content) > 1:
+                msg["content"] = new_content
+            else:
+                msg["content"] = ""
 
 # region Chatbot311
 class Chatbot311:
