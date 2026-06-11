@@ -278,8 +278,8 @@ class Chatbot311:
     def INPUT_TYPES(cls):
         inputs = {
             "required": {
-                "mode": (["Interactive Chat (Pause)", "One-Shot Prompt", "Pass Last Output (Bypass)", "LLM Disabled (Manual)"], {
-                    "default": "Interactive Chat (Pause)"
+                "mode": (["LLM Chat (Pause & Confirm)", "LLM One-Shot (Immediate)", "Manual (Pause & Confirm)", "Manual One-Shot (Immediate)", "Bypass (Pass Last Output)"], {
+                    "default": "LLM Chat (Pause & Confirm)"
                 }),
                 "sound_alert": ("BOOLEAN", {
                     "default": True,
