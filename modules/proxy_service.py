@@ -34,20 +34,13 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     
     key = (user_api_key or "").strip()
     
-    # Debug logging
+    # Log key presence and length instead of raw value
     env_key = os.environ.get("GEMINI_API_KEY")
-    try:
-        from pathlib import Path
-        log_file = Path(__file__).resolve().parent.parent / "debug_key.txt"
-        log_file.write_text(
-            f"user_api_key: {repr(user_api_key)}\n"
-            f"env_api_key: {repr(env_key)}\n"
-            f"key_after_strip: {repr(key)}\n",
-            encoding="utf-8"
-        )
-        LOG.info(f"[Chatbot311 Debug] user_api_key={repr(user_api_key)}, env_api_key={repr(env_key)}, key_after_strip={repr(key)}")
-    except Exception as e:
-        LOG.error("Failed to write debug_key.txt: %s", e)
+    LOG.info(
+        f"[Chatbot311 Auth] user_api_key present: {bool(user_api_key)} (len={len(user_api_key) if user_api_key else 0}), "
+        f"env_api_key present: {bool(env_key)} (len={len(env_key) if env_key else 0}), "
+        f"resolved_key present: {bool(key)} (len={len(key) if key else 0})"
+    )
         
     import re
     if (not key or 

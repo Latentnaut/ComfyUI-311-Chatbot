@@ -11,3 +11,7 @@ __pycache__/
 
 # Chat history
 conversations/
+
+# Temporary / Debug files
+debug_key.txt
+*.bak
