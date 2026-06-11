@@ -2538,58 +2538,48 @@ app.registerExtension({
           
           if (data && data.widgets_values) {
             const vals = data.widgets_values;
-            let loadedHistoryVal = null;
+            
+            // Determine layout version by the index of the first number widget
+            const firstNumberIndex = vals.findIndex(v => typeof v === "number");
+            const isNewLayout = firstNumberIndex === 3;
+            
             let loadedModeVal = null;
             let loadedSoundAlertVal = null;
-            let loadedUseCreditsVal = null;
-            let loadedNumDelimitersVal = null;
+            let loadedAPIKeyVal = null;
             let loadedSeedVal = null;
+            let loadedNumDelimitersVal = null;
+            let loadedUseCreditsVal = null;
+            let loadedHistoryVal = null;
             
-            const booleanCount = vals.filter(v => typeof v === "boolean").length;
-            const isNewFormat = booleanCount >= 2;
+            if (isNewLayout) {
+              // New layout order: mode, sound_alert, api_key, seed, number_of_delimiters, ...
+              loadedModeVal = vals[0];
+              loadedSoundAlertVal = vals[1];
+              loadedAPIKeyVal = vals[2];
+              loadedSeedVal = vals[3];
+              loadedNumDelimitersVal = vals[4];
+              
+              // use_comfyui_credits is the last boolean before history/draft
+              const booleans = vals.map((v, idx) => ({val: v, idx})).filter(o => typeof o.val === "boolean");
+              if (booleans.length >= 2) {
+                loadedUseCreditsVal = booleans[booleans.length - 1].val;
+              }
+            } else {
+              // Old layout order: mode, sound_alert, number_of_delimiters, api_key, seed, use_comfyui_credits, ...
+              loadedModeVal = vals[0];
+              loadedSoundAlertVal = vals[1];
+              loadedNumDelimitersVal = vals[2];
+              loadedAPIKeyVal = vals[3];
+              loadedSeedVal = vals[4];
+              loadedUseCreditsVal = vals[5];
+            }
             
-            let boolCount = 0;
-            let numberCount = 0;
-            
+            // Find history value (which is a JSON string starting with { or [)
             vals.forEach(val => {
-              if (typeof val === "boolean") {
-                if (boolCount === 0) {
-                  loadedSoundAlertVal = val;
-                } else {
-                  loadedUseCreditsVal = val;
-                }
-                boolCount++;
-              } else if (typeof val === "number") {
-                if (isNewFormat) {
-                  if (numberCount === 0) {
-                    loadedSeedVal = val;
-                  } else {
-                    loadedNumDelimitersVal = val;
-                  }
-                } else {
-                  if (numberCount === 0) {
-                    loadedNumDelimitersVal = val;
-                  } else {
-                    loadedSeedVal = val;
-                  }
-                }
-                numberCount++;
-              } else if (typeof val === "string") {
+              if (val && typeof val === "string") {
                 const trimmed = val.trim();
                 if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
                   loadedHistoryVal = val;
-                } else if ([
-                  "Interactive Chat (Pause)", 
-                  "One-Shot Prompt", 
-                  "Pass Last Output (Bypass)", 
-                  "LLM Disabled (Manual)",
-                  "LLM Chat (Pause & Confirm)",
-                  "LLM One-Shot (Immediate)",
-                  "Manual (Pause & Confirm)",
-                  "Manual One-Shot (Immediate)",
-                  "Bypass (Pass Last Output)"
-                ].includes(val)) {
-                  loadedModeVal = val;
                 }
               }
             });
@@ -2618,6 +2608,12 @@ app.registerExtension({
               const soundAlertWidget = (node.widgets || []).find(w => w && w.name === "sound_alert");
               if (soundAlertWidget) {
                 soundAlertWidget.value = loadedSoundAlertVal;
+              }
+            }
+            if (loadedAPIKeyVal !== null) {
+              const apiKeyWidget = (node.widgets || []).find(w => w && w.name === "api_key");
+              if (apiKeyWidget) {
+                apiKeyWidget.value = String(loadedAPIKeyVal);
               }
             }
             if (loadedUseCreditsVal !== null) {
