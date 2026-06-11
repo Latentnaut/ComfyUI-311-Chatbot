@@ -528,7 +528,10 @@ class Chatbot311:
                             "image_url": {"url": base64_image}
                         })
                         has_new_input = True
-                    
+        # Check if we should skip auto-execution in interactive/manual pause modes when there is no graph prompt or UI draft
+        if actual_mode in ("LLM Chat (Pause & Confirm)", "Manual (Pause & Confirm)") and not prompt_str.strip() and not has_draft:
+            has_new_input = False
+
         if has_new_input and is_really_new:
             if image is not None and not prompt_str and not has_draft:
                 num_imgs = len(image) if len(image.shape) == 4 else 1
