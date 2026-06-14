@@ -19,6 +19,14 @@ SERVICES: Dict[str, Dict[str, Any]] = {
 }
 
 def _read_secret(env_name: str, file_env_name: Optional[str] = None) -> Optional[str]:
+    # Reload .env at runtime to capture any updates without restarting ComfyUI
+    try:
+        from pathlib import Path
+        from .chatbot_utils import maybe_load_dotenv
+        repo_root = Path(__file__).resolve().parent.parent
+        maybe_load_dotenv(repo_root / ".env")
+    except Exception:
+        pass
     # Try reading environment variable directly
     val = os.environ.get(env_name)
     if val:
@@ -29,6 +37,15 @@ PROXY_SECRET = None
 PROXY_SECRET_HEADER = "X-Proxy-Secret"
 
 def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxypath: Optional[str], user_api_key: Optional[str] = None) -> Tuple[str, Dict[str, str], int, Dict[str, Any]]:
+    # Reload .env at runtime to capture any updates without restarting ComfyUI
+    try:
+        from pathlib import Path
+        from .chatbot_utils import maybe_load_dotenv
+        repo_root = Path(__file__).resolve().parent.parent
+        maybe_load_dotenv(repo_root / ".env")
+    except Exception:
+        pass
+
     headers: Dict[str, str] = {}
     timeout = int(cfg.get("timeout", 60))
     
@@ -62,7 +79,7 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     if proxypath:
         upstream = base_url.rstrip("/") + "/" + proxypath.lstrip("/")
     else:
-        model = body.get("model") or cfg.get("default_model")
+        model = body.get("model") or os.environ.get("GEMINI_MODEL") or cfg.get("default_model")
         path = "/v1beta/models/{model}:generateContent".format(model=model)
         upstream = base_url.rstrip("/") + path
 
@@ -70,7 +87,7 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     if isinstance(forward_body, dict):
         forward_body = dict(forward_body)
         if "model" not in forward_body:
-            forward_body["model"] = cfg.get("default_model", "gemini-3.5-flash")
+            forward_body["model"] = os.environ.get("GEMINI_MODEL") or cfg.get("default_model", "gemini-3.5-flash")
 
     # Map OpenAI-compatible endpoints (like v1/chat/completions) to Gemini's beta openai endpoint
     if proxypath and proxypath.lstrip("/").startswith("v1/"):

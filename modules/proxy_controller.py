@@ -113,8 +113,8 @@ async def proxy_service(request: web.Request) -> web.Response:
                     }
                     return web.json_response(completion, status=200)
             except Exception as e:
-                LOG.exception("Failed to query Gemini using ComfyUI Credits in proxy_service")
-                return web.json_response({"detail": "credits_error", "error": str(e)}, status=500)
+                LOG.warning("ComfyUI Credits failed in proxy_service (%s), falling back to custom API key...", e)
+                # Fall through to custom API key path below
 
         user_key = request.headers.get("X-Gemini-API-Key", "")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
@@ -327,8 +327,8 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
                     }
                     return web.json_response(completion, status=200)
             except Exception as e:
-                LOG.exception("Failed to query Gemini using ComfyUI Credits in proxy_service_with_path")
-                return web.json_response({"detail": "credits_error", "error": str(e)}, status=500)
+                LOG.warning("ComfyUI Credits failed in proxy_service_with_path (%s), falling back to custom API key...", e)
+                # Fall through to custom API key path below
 
         user_key = request.headers.get("X-Gemini-API-Key", "")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(

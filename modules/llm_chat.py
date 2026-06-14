@@ -137,6 +137,21 @@ def get_comfy_org_auth(hidden_token=None):
     if not auth_token and _CACHED_COMFY_ORG_TOKEN:
         auth_token = _CACHED_COMFY_ORG_TOKEN
         LOG.debug("Using cached ComfyUI Org auth token from prior workflow execution.")
+
+    # Cross-module fallback: check other nodes (like Gemini3 fallback node) for cached token
+    if not auth_token:
+        try:
+            import sys
+            for m_name, m in list(sys.modules.items()):
+                if hasattr(m, "_CACHED_COMFY_ORG_TOKEN"):
+                    token = getattr(m, "_CACHED_COMFY_ORG_TOKEN", None)
+                    if token:
+                        auth_token = token
+                        _CACHED_COMFY_ORG_TOKEN = token
+                        LOG.debug(f"Found and cached ComfyUI Org auth token from module: {m_name}")
+                        break
+        except Exception:
+            pass
             
     if not auth_token:
         auth_token = os.environ.get("COMFY_API_TOKEN") or os.environ.get("COMFY_ORG_API_KEY")
@@ -258,9 +273,9 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                          actual_model = model or "gemini-3.5-flash"
                          if actual_model == "gemini-3-pro-preview":
                              actual_model = "gemini-3.1-pro-preview"
-                         elif actual_model == "gemini-3-1-pro":
+                         elif actual_model in ("gemini-3-1-pro", "gemini-3.1-pro"):
                              actual_model = "gemini-3.1-pro-preview"
-                         elif actual_model == "gemini-3-1-flash-lite":
+                         elif actual_model in ("gemini-3-1-flash-lite", "gemini-3.1-flash-lite"):
                              actual_model = "gemini-3.1-flash-lite-preview"
                          
                          result = new_loop.run_until_complete(
@@ -274,7 +289,7 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                                      ),
                                      response_model=GeminiGenerateContentResponse,
                                  ),
-                                 timeout=60.0
+                                 timeout=120.0
                              )
                          )
                          

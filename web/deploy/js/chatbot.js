@@ -1294,8 +1294,50 @@ class ChatbotUI {
     // Case 1: Check node outputs from the last execution (highly dynamic values)
     const originSlot = link.origin_slot;
     const nodeOutputs = app.node_outputs?.[originNode.id];
-    if (nodeOutputs && originSlot !== undefined && nodeOutputs[originSlot] !== undefined) {
-      const val = nodeOutputs[originSlot];
+    let val = undefined;
+    
+    if (nodeOutputs) {
+      if (Array.isArray(nodeOutputs)) {
+        val = nodeOutputs[originSlot];
+      } else if (typeof nodeOutputs === "object") {
+        if (nodeOutputs[originSlot] !== undefined) {
+          val = nodeOutputs[originSlot];
+        } else {
+          const slot = originNode.outputs?.[originSlot];
+          if (slot) {
+            const slotName = slot.name;
+            if (slotName && nodeOutputs[slotName] !== undefined) {
+              val = nodeOutputs[slotName];
+            } else if (slotName && nodeOutputs[slotName.toLowerCase()] !== undefined) {
+              val = nodeOutputs[slotName.toLowerCase()];
+            } else if (slotName && nodeOutputs[slotName.toUpperCase()] !== undefined) {
+              val = nodeOutputs[slotName.toUpperCase()];
+            }
+          }
+          if (val === undefined) {
+            const keys = Object.keys(nodeOutputs);
+            if (keys.length === 1) {
+              val = nodeOutputs[keys[0]];
+            } else if (keys.length > 0) {
+              const commonKeys = ["string", "text", "value", "val", "prompt", "output"];
+              for (const k of commonKeys) {
+                if (nodeOutputs[k] !== undefined) {
+                  val = nodeOutputs[k];
+                  break;
+                }
+                const upperK = k.toUpperCase();
+                if (nodeOutputs[upperK] !== undefined) {
+                  val = nodeOutputs[upperK];
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    if (val !== undefined && val !== null) {
       if (Array.isArray(val) && val.length > 0) {
         if (typeof val[0] === "string") return val[0];
         if (val[0] && typeof val[0] === "object") {
@@ -1312,7 +1354,15 @@ class ChatbotUI {
     
     // Case 2: Check origin node widgets (fallback for primitive/static values)
     if (originNode.widgets && originNode.widgets.length > 0) {
-      const textWidget = originNode.widgets.find(w => w.name === "text" || w.name === "string" || w.name === "value" || w.type === "text" || w.type === "customtext");
+      const textWidget = originNode.widgets.find(w => 
+        w.name === "text" || 
+        w.name === "string" || 
+        w.name === "value" || 
+        w.name === inputName ||
+        (w.name && w.name.toLowerCase() === inputName.toLowerCase()) ||
+        w.type === "text" || 
+        w.type === "customtext"
+      );
       if (textWidget) {
         return String(textWidget.value);
       }
@@ -1737,8 +1787,14 @@ class ChatbotUI {
       const sysVariableVal = parts[1] ? parts[1].trim() : "";
       
       const systemParts = [];
-      if (sysGeneralVal) systemParts.push(sysGeneralVal);
-      if (sysVariableVal) systemParts.push(sysVariableVal);
+      if (sysGeneralVal) {
+        systemParts.push(sysGeneralVal);
+      } else if (this.defaultSystemPrompt && this.defaultSystemPrompt.trim()) {
+        systemParts.push(this.defaultSystemPrompt.trim());
+      }
+      if (sysVariableVal) {
+        systemParts.push(sysVariableVal);
+      }
       if (systemParts.length > 0) {
         activeSystemPrompt = systemParts.join("\n\n");
       }
