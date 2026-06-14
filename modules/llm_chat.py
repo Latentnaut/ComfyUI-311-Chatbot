@@ -270,6 +270,23 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                          DummyNode.hidden.api_key_comfy_org = actual_token
                          DummyNode.hidden.unique_id = "Chatbot311_Generated_Node"
                          
+                         # Dynamically mock GeminiNode and GeminiImage2 hidden attributes if they exist
+                         try:
+                             from comfy_api_nodes.nodes_gemini import GeminiNode, GeminiImage2
+                             if not hasattr(GeminiNode, "hidden") or GeminiNode.hidden is None:
+                                 class DummyHiddenNode: pass
+                                 GeminiNode.hidden = DummyHiddenNode()
+                             GeminiNode.hidden.auth_token_comfy_org = actual_token
+                             GeminiNode.hidden.api_key_comfy_org = actual_token
+                             
+                             if not hasattr(GeminiImage2, "hidden") or GeminiImage2.hidden is None:
+                                 class DummyHiddenImg: pass
+                                 GeminiImage2.hidden = DummyHiddenImg()
+                             GeminiImage2.hidden.auth_token_comfy_org = actual_token
+                             GeminiImage2.hidden.api_key_comfy_org = actual_token
+                         except Exception:
+                             pass
+                         
                          actual_model = model or "gemini-3.5-flash"
                          if actual_model == "gemini-3-pro-preview":
                              actual_model = "gemini-3.1-pro-preview"
