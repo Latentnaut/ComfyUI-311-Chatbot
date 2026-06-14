@@ -846,7 +846,14 @@ class Chatbot311:
                             except Exception:
                                 pass
                 except Exception as e:
-                    history.append({"role": "assistant", "content": f"Execution Error: {str(e)}"})
+                    err_msg = str(e)
+                    if "API key not valid" in err_msg or "valid API key" in err_msg:
+                        friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
+                    elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
+                        friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
+                    else:
+                        friendly = f"Execution Error: {err_msg}"
+                    history.append({"role": "assistant", "content": friendly})
                 
                 # Send websocket update back to frontend chat panel so it syncs instantly without reload
                 if node_id:
@@ -992,7 +999,14 @@ class Chatbot311:
                             except Exception:
                                 pass
                 except Exception as e:
-                    history.append({"role": "assistant", "content": f"Execution Error: {str(e)}"})
+                    err_msg = str(e)
+                    if "API key not valid" in err_msg or "valid API key" in err_msg:
+                        friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
+                    elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
+                        friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
+                    else:
+                        friendly = f"Execution Error: {err_msg}"
+                    history.append({"role": "assistant", "content": friendly})
                     if node_id:
                         try:
                             PromptServer.instance.send_sync("chatbot311-update-history", {

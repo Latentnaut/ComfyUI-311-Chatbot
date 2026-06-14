@@ -1572,6 +1572,15 @@ class ChatbotUI {
       text = content || "";
     }
     
+    // Format assistant execution/API errors into user-friendly warnings
+    if (role === "assistant" && typeof text === "string" && text.includes("Error")) {
+      if (text.includes("API key not valid") || text.includes("valid API key")) {
+        text = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node.";
+      } else if (text.includes("rate_limited") || text.includes("429") || text.toLowerCase().includes("quota")) {
+        text = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
+      }
+    }
+    
     if (images.length > 0) {
       const imgsContainer = document.createElement("div");
       imgsContainer.className = "chatbot311-message-images";
