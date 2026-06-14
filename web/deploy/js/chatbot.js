@@ -2471,38 +2471,54 @@ app.registerExtension({
         node.chatbotWidget = widget;
         node.chatbotUI = chatbot;
         
-        // Force DOM widget wrapper to fill node width (ComfyUI V2 fix)
-        const syncWidgetWidth = () => {
-          const targetWidth = (node.size ? node.size[0] - 30 : 350);
-          if (widget.element) {
-            widget.element.style.width = "100%";
-            if (widget.element.parentElement) {
-              widget.element.parentElement.style.width = targetWidth + "px";
+        let sizeObserver = null;
+        let lastNodeWidth = 0;
+        let lastNodeHeight = 0;
+
+        node.syncWidgetSize = (size) => {
+          const actualSize = size || node.size;
+          if (!actualSize) return;
+
+          if (widget.element && widget.element.parentElement) {
+            const parent = widget.element.parentElement;
+            
+            // Register MutationObserver once parent is available
+            if (!sizeObserver && typeof MutationObserver !== "undefined") {
+              sizeObserver = new MutationObserver(() => {
+                node.syncWidgetSize();
+              });
+              sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
+            }
+            
+            const targetWidth = actualSize[0] - 20;
+            const topOffset = parseFloat(parent.style.top) || 260;
+            const targetHeight = Math.max(250, actualSize[1] - topOffset - 16);
+            
+            // Only update DOM styles if node size or widget width differs
+            if (actualSize[0] !== lastNodeWidth || actualSize[1] !== lastNodeHeight || parent.style.width !== targetWidth + "px") {
+              lastNodeWidth = actualSize[0];
+              lastNodeHeight = actualSize[1];
+              
+              widget.width = targetWidth;
+              widget.height = targetHeight;
+              
+              parent.style.setProperty("width", targetWidth + "px", "important");
+              parent.style.setProperty("max-width", "none", "important");
+              parent.style.setProperty("margin", "0px", "important");
+              parent.style.setProperty("padding", "0px", "important");
+              parent.style.setProperty("box-sizing", "border-box", "important");
+              
+              widget.element.style.setProperty("width", "100%", "important");
+              widget.element.style.setProperty("max-width", "none", "important");
+              widget.element.style.setProperty("margin", "0px", "important");
+              widget.element.style.setProperty("box-sizing", "border-box", "important");
+              
+              parent.style.setProperty("height", targetHeight + "px", "important");
+              widget.element.style.height = "100%";
             }
           }
-          widget.width = targetWidth;
         };
-        syncWidgetWidth();
-
-        // Setup MutationObserver to prevent ComfyUI from overriding the width on click/focus
-        let widthObserver = null;
-        if (typeof MutationObserver !== "undefined") {
-          setTimeout(() => {
-            if (widget.element && widget.element.parentElement) {
-              const parent = widget.element.parentElement;
-              const targetWidth = (widget.width || (node.size ? node.size[0] - 30 : 350)) + "px";
-              parent.style.width = targetWidth;
-              
-              widthObserver = new MutationObserver(() => {
-                const currentTargetWidth = (widget.width || (node.size ? node.size[0] - 30 : 350)) + "px";
-                if (parent.style.width !== currentTargetWidth) {
-                  parent.style.width = currentTargetWidth;
-                }
-              });
-              widthObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
-            }
-          }, 100);
-        }
+        node.syncWidgetSize();
         
         if (!node.size || node.size[0] < 200 || node.size[1] < 200) {
           node.size = [380, 580];
@@ -2513,8 +2529,8 @@ app.registerExtension({
         
         const onRemoved = node.onRemoved;
         node.onRemoved = function() {
-          if (widthObserver) {
-            widthObserver.disconnect();
+          if (sizeObserver) {
+            sizeObserver.disconnect();
           }
           if (chatbot) chatbot.destroy();
           if (onRemoved) onRemoved.apply(this, arguments);
@@ -2554,18 +2570,9 @@ app.registerExtension({
         };
         
         node.onResize = function(size) {
-          // Sync chatbot container width to node width (ComfyUI V2 fix)
-          if (node.chatbotWidget) {
-            const targetWidth = size[0] - 30;
-            node.chatbotWidget.width = targetWidth;
-            if (node.chatbotWidget.element) {
-              node.chatbotWidget.element.style.width = "100%";
-              if (node.chatbotWidget.element.parentElement) {
-                node.chatbotWidget.element.parentElement.style.width = targetWidth + "px";
-              }
-            }
+          if (node.syncWidgetSize) {
+            node.syncWidgetSize();
           }
-          // Let ComfyUI V2 handle layout. Just redraw.
           if (node.graph) {
             node.graph.setDirtyCanvas(true, true);
           }
