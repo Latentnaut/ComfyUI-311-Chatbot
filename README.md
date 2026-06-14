@@ -36,7 +36,8 @@ Perfect for feeding Stable Diffusion or FLUX text encoders. The node can parse t
 - **`sound_alert`**: Toggle a desktop sound alert when ComfyUI execution pauses at the node.
 - **`image`** *(Optional)*: Connect image tensors from other nodes.
 - **`prompt`** *(Optional)*: Force input prompts dynamically from text nodes.
-- **`system`** *(Optional)*: Connect a custom system instruction block. If empty, falls back to the local [system_prompt.md](file:///c:/AI/ComfyUI_windows_portable/ComfyUI/custom_nodes/ComfyUI-311-Chatbot/system_prompt.md).
+- **`system_general`** *(Optional)*: Connect a custom base system instruction block. If empty, falls back to the local [system_prompt.md](file:///c:/AI/ComfyUI_windows_portable/ComfyUI/custom_nodes/ComfyUI-311-Chatbot/system_prompt.md).
+- **`system_variable`** *(Optional)*: Connect a dynamic system instruction block to append to the base prompt (e.g. for dynamic contextual rules).
 
 ### Outputs
 - **`chat_history_json`**: Full conversation log in standard JSON format.

@@ -1395,7 +1395,7 @@ class ChatbotUI {
     }
 
     // Check connected system prompts
-    const sysGeneral = this.getConnectedInputValue("system_general") || this.getConnectedInputValue("system");
+    const sysGeneral = this.getConnectedInputValue("system_general");
     const sysVariable = this.getConnectedInputValue("system_variable");
     const badgeSystem = this.container.querySelector("#badge-system");
     

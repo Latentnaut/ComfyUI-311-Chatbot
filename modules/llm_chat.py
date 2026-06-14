@@ -641,22 +641,18 @@ class Chatbot311:
         prompt_str = unpack_str(kwargs.get("prompt", ""))
         system_general_str = unpack_str(kwargs.get("system_general", ""))
         system_variable_str = unpack_str(kwargs.get("system_variable", ""))
-        system_legacy_str = unpack_str(kwargs.get("system", ""))
         
         # 1. Determine the base/general system prompt
         gen_prompt = system_general_str
         if not gen_prompt or not gen_prompt.strip():
-            # Fallback to legacy system input if present, otherwise to file
-            if system_legacy_str and system_legacy_str.strip():
-                gen_prompt = system_legacy_str
-            else:
-                try:
-                    from pathlib import Path
-                    sys_prompt_file = Path(__file__).resolve().parent.parent / "system_prompt.md"
-                    if sys_prompt_file.exists():
-                        gen_prompt = sys_prompt_file.read_text(encoding="utf-8")
-                except Exception as e:
-                    LOG.error("Failed to load default system prompt from file: %s", e)
+            # Fallback to file
+            try:
+                from pathlib import Path
+                sys_prompt_file = Path(__file__).resolve().parent.parent / "system_prompt.md"
+                if sys_prompt_file.exists():
+                    gen_prompt = sys_prompt_file.read_text(encoding="utf-8")
+            except Exception as e:
+                LOG.error("Failed to load default system prompt from file: %s", e)
 
         # 2. Combine general and variable system prompts
         system_parts = []
