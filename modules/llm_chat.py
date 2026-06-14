@@ -126,6 +126,9 @@ def get_comfy_org_auth(hidden_token=None):
     if isinstance(auth_token, list):
         auth_token = auth_token[0] if auth_token else ""
     
+    if auth_token and not isinstance(auth_token, str):
+        auth_token = None
+
     if not auth_token:
         try:
             from comfy.cli_args import args
@@ -134,7 +137,7 @@ def get_comfy_org_auth(hidden_token=None):
             pass
 
     # Fallback: use cached token from a previous workflow execution
-    if not auth_token and _CACHED_COMFY_ORG_TOKEN:
+    if not auth_token and _CACHED_COMFY_ORG_TOKEN and isinstance(_CACHED_COMFY_ORG_TOKEN, str):
         auth_token = _CACHED_COMFY_ORG_TOKEN
         LOG.debug("Using cached ComfyUI Org auth token from prior workflow execution.")
 
@@ -143,17 +146,22 @@ def get_comfy_org_auth(hidden_token=None):
         try:
             import sys
             for m_name, m in list(sys.modules.items()):
-                if hasattr(m, "_CACHED_COMFY_ORG_TOKEN"):
-                    token = getattr(m, "_CACHED_COMFY_ORG_TOKEN", None)
-                    if token:
-                        auth_token = token
-                        _CACHED_COMFY_ORG_TOKEN = token
-                        LOG.debug(f"Found and cached ComfyUI Org auth token from module: {m_name}")
-                        break
+                if "torch" in m_name:
+                    continue
+                try:
+                    if hasattr(m, "_CACHED_COMFY_ORG_TOKEN"):
+                        token = getattr(m, "_CACHED_COMFY_ORG_TOKEN", None)
+                        if token and isinstance(token, str):
+                            auth_token = token
+                            _CACHED_COMFY_ORG_TOKEN = token
+                            LOG.debug(f"Found and cached ComfyUI Org auth token from module: {m_name}")
+                            break
+                except Exception:
+                    pass
         except Exception:
             pass
             
-    if not auth_token:
+    if not auth_token or not isinstance(auth_token, str):
         auth_token = os.environ.get("COMFY_API_TOKEN") or os.environ.get("COMFY_ORG_API_KEY")
 
     if auth_token:
