@@ -1291,6 +1291,26 @@ class ChatbotUI {
     const originNode = app.graph.getNodeById(link.origin_id);
     if (!originNode) return null;
     
+    // Case 1: Check node outputs from the last execution (highly dynamic values)
+    const originSlot = link.origin_slot;
+    const nodeOutputs = app.node_outputs?.[originNode.id];
+    if (nodeOutputs && originSlot !== undefined && nodeOutputs[originSlot] !== undefined) {
+      const val = nodeOutputs[originSlot];
+      if (Array.isArray(val) && val.length > 0) {
+        if (typeof val[0] === "string") return val[0];
+        if (val[0] && typeof val[0] === "object") {
+          if (val[0].string !== undefined) return String(val[0].string);
+          if (val[0].text !== undefined) return String(val[0].text);
+        }
+      } else if (typeof val === "string") {
+        return val;
+      } else if (val && typeof val === "object") {
+        if (val.string !== undefined) return String(val.string);
+        if (val.text !== undefined) return String(val.text);
+      }
+    }
+    
+    // Case 2: Check origin node widgets (fallback for primitive/static values)
     if (originNode.widgets && originNode.widgets.length > 0) {
       const textWidget = originNode.widgets.find(w => w.name === "text" || w.name === "string" || w.name === "value" || w.type === "text" || w.type === "customtext");
       if (textWidget) {
@@ -1710,7 +1730,19 @@ class ChatbotUI {
     
     // Build messages payload for API (connected system prompt vs default system prompt)
     const apiMessages = [];
-    let activeSystemPrompt = this.connectedSystemPrompt || this.defaultSystemPrompt;
+    let activeSystemPrompt = this.defaultSystemPrompt;
+    if (this.connectedSystemPrompt) {
+      const parts = this.connectedSystemPrompt.split("|||");
+      const sysGeneralVal = parts[0] ? parts[0].trim() : "";
+      const sysVariableVal = parts[1] ? parts[1].trim() : "";
+      
+      const systemParts = [];
+      if (sysGeneralVal) systemParts.push(sysGeneralVal);
+      if (sysVariableVal) systemParts.push(sysVariableVal);
+      if (systemParts.length > 0) {
+        activeSystemPrompt = systemParts.join("\n\n");
+      }
+    }
 
     // Read active delimiters from node widgets to inject into Gemini system instructions
     const delimitersInfo = [];
