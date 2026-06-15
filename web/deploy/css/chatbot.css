@@ -527,14 +527,10 @@
   margin-top: 4px;
 }
 
-.chatbot311-message.user .chatbot311-msg-toolbar {
+.chatbot311-message.user .chatbot311-msg-toolbar,
+.chatbot311-message.assistant .chatbot311-msg-toolbar {
   align-self: flex-end;
   justify-content: flex-end;
-}
-
-.chatbot311-message.assistant .chatbot311-msg-toolbar {
-  align-self: flex-start;
-  justify-content: flex-start;
 }
 
 .chatbot311-message:hover .chatbot311-msg-toolbar {
