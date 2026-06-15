@@ -1029,6 +1029,9 @@ class ChatbotUI {
     try {
       const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
       let apiKey = apiKeyWidget ? String(apiKeyWidget.value || "").trim() : "";
+      if (!apiKey) {
+        apiKey = String(this.getConnectedInputValue("api_key") || "").trim();
+      }
       if (apiKey && (
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
@@ -1952,6 +1955,9 @@ class ChatbotUI {
     try {
       const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
       let apiKey = apiKeyWidget ? String(apiKeyWidget.value || "").trim() : "";
+      if (!apiKey) {
+        apiKey = String(this.getConnectedInputValue("api_key") || "").trim();
+      }
       if (apiKey && (
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
