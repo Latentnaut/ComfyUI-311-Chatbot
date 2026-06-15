@@ -296,12 +296,21 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                              pass
                          
                          actual_model = model or "gemini-3.5-flash"
-                         if actual_model == "gemini-3-pro-preview":
-                             actual_model = "gemini-3.1-pro-preview"
-                         elif actual_model in ("gemini-3-1-pro", "gemini-3.1-pro"):
-                             actual_model = "gemini-3.1-pro-preview"
-                         elif actual_model in ("gemini-3-1-flash-lite", "gemini-3.1-flash-lite"):
+                         # Map model names to supported Comfy Credits Vertex API endpoints
+                         if actual_model in ("gemini-3.5-flash", "gemini-3-1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"):
                              actual_model = "gemini-3.1-flash-lite-preview"
+                         elif actual_model in ("gemini-3.5-pro", "gemini-3-1-pro", "gemini-3.1-pro", "gemini-3-pro-preview", "gemini-3.1-pro-preview"):
+                             actual_model = "gemini-3.1-pro-preview"
+                         elif actual_model in ("gemini-2.5-flash", "gemini-2.5-flash-preview"):
+                             actual_model = "gemini-2.5-flash"
+                         elif actual_model in ("gemini-2.5-pro", "gemini-2.5-pro-preview"):
+                             actual_model = "gemini-2.5-pro"
+                         else:
+                             # Fallback based on model name keywords
+                             if "pro" in actual_model.lower():
+                                 actual_model = "gemini-3.1-pro-preview"
+                             else:
+                                 actual_model = "gemini-3.1-flash-lite-preview"
                          
                          result = new_loop.run_until_complete(
                              asyncio.wait_for(
