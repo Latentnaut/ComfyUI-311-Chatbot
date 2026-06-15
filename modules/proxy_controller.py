@@ -224,7 +224,9 @@ async def proxy_service_status(request: web.Request) -> web.Response:
         payload = {"service": service, "ready": ready}
         if reason and not ready:
             payload["reason"] = reason
-        return web.json_response(payload, status=200 if ready else 503)
+        # Return 200 OK so long as the ComfyUI server is reachable, preventing
+        # the frontend from showing a confusing "Connection Offline" overlay when it's online.
+        return web.json_response(payload, status=200)
     except Exception as exc:
         LOG.exception("Proxy status check failed: %s", exc)
         return web.json_response({"detail": "proxy_error", "error": str(exc)}, status=500)
