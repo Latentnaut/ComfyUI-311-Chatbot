@@ -172,11 +172,11 @@ def get_comfy_org_auth(hidden_token=None):
         
     return comfy_api_base, auth_header, auth_token
 
-def query_gemini_sync(history: list, model: str = None, api_key: str = None, use_comfyui_credits: bool = True, auth_token_comfy_org: str = "") -> str:
+def query_gemini_sync(history: list, model: str = None, api_key: str = None, use_comfyui_credits: bool = True, auth_token_comfy_org: str = "", info: dict = None) -> str:
     """
     Send standard chat history list to Gemini's OpenAI-compatible completions endpoint
     or to official ComfyUI API using ComfyUI Credits.
-    Uses urllib or sync_op synchronously to avoid event loop conflicts.
+    Urllib or sync_op is used synchronously to avoid event loop conflicts.
     """
     if use_comfyui_credits:
         try:
@@ -204,6 +204,19 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                 
                 thread_res = []
                 thread_err = []
+                
+                actual_model = model or "gemini-3.5-flash"
+                # Map legacy or known different names, but let 3.5 models pass through to be tried first
+                if actual_model in ("gemini-3-1-flash-lite", "gemini-3.1-flash-lite"):
+                    actual_model = "gemini-3.1-flash-lite-preview"
+                elif actual_model in ("gemini-3-1-pro", "gemini-3.1-pro", "gemini-3-pro-preview"):
+                    actual_model = "gemini-3.1-pro-preview"
+                elif actual_model in ("gemini-2.5-flash", "gemini-2.5-flash-preview"):
+                    actual_model = "gemini-2.5-flash"
+                elif actual_model in ("gemini-2.5-pro", "gemini-2.5-pro-preview"):
+                    actual_model = "gemini-2.5-pro"
+
+                actual_model_used = [actual_model]
                 
                 def _run_async_credits():
                      import asyncio
@@ -295,24 +308,13 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                          except Exception:
                              pass
                          
-                         actual_model = model or "gemini-3.5-flash"
-                         # Map legacy or known different names, but let 3.5 models pass through to be tried first
-                         if actual_model in ("gemini-3-1-flash-lite", "gemini-3.1-flash-lite"):
-                             actual_model = "gemini-3.1-flash-lite-preview"
-                         elif actual_model in ("gemini-3-1-pro", "gemini-3.1-pro", "gemini-3-pro-preview"):
-                             actual_model = "gemini-3.1-pro-preview"
-                         elif actual_model in ("gemini-2.5-flash", "gemini-2.5-flash-preview"):
-                             actual_model = "gemini-2.5-flash"
-                         elif actual_model in ("gemini-2.5-pro", "gemini-2.5-pro-preview"):
-                             actual_model = "gemini-2.5-pro"
-                         
                          result = None
                          try:
                              result = new_loop.run_until_complete(
                                  asyncio.wait_for(
                                      sync_op(
                                          DummyNode,
-                                         endpoint=ApiEndpoint(path=f"/proxy/vertexai/gemini/{actual_model}", method="POST"),
+                                         endpoint=ApiEndpoint(path=f"/proxy/vertexai/gemini/{actual_model_used[0]}", method="POST"),
                                          data=GeminiGenerateContentRequest(
                                              contents=filtered_contents,
                                              systemInstruction=system_instr,
@@ -325,18 +327,19 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                          except Exception as first_exc:
                              # Determine fallback model
                              fallback_model = None
-                             if actual_model == "gemini-3.5-flash":
+                             if actual_model_used[0] == "gemini-3.5-flash":
                                  fallback_model = "gemini-3.1-flash-lite-preview"
-                             elif actual_model == "gemini-3.5-pro":
+                             elif actual_model_used[0] == "gemini-3.5-pro":
                                  fallback_model = "gemini-3.1-pro-preview"
-                             elif actual_model not in ("gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"):
-                                 if "pro" in actual_model.lower():
+                             elif actual_model_used[0] not in ("gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"):
+                                 if "pro" in actual_model_used[0].lower():
                                      fallback_model = "gemini-3.1-pro-preview"
                                  else:
                                      fallback_model = "gemini-3.1-flash-lite-preview"
                              
                              if fallback_model:
-                                 LOG.warning("ComfyUI Credits call with %s failed: %s. Retrying with fallback model %s...", actual_model, first_exc, fallback_model)
+                                 LOG.warning("ComfyUI Credits call with %s failed: %s. Retrying with fallback model %s...", actual_model_used[0], first_exc, fallback_model)
+                                 actual_model_used[0] = fallback_model
                                  result = new_loop.run_until_complete(
                                      asyncio.wait_for(
                                          sync_op(
@@ -383,6 +386,8 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                 if thread_err:
                      raise thread_err[0]
                      
+                if isinstance(info, dict):
+                    info["model"] = actual_model_used[0]
                 return thread_res[0]
         except Exception as e:
             LOG.warning("ComfyUI Credits failed. Reason: %s. Falling back to custom keys...", e)
@@ -390,8 +395,12 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
     cfg = proxy_svc.SERVICES.get("gemini", {})
     proxypath = "v1/chat/completions"
     
+    actual_model_used = model or cfg.get("default_model", "gemini-3.5-flash")
+    if isinstance(info, dict):
+        info["model"] = actual_model_used
+
     body = {
-        "model": model or cfg.get("default_model", "gemini-3.5-flash"),
+        "model": actual_model_used,
         "messages": history,
         "stream": False
     }
@@ -894,8 +903,9 @@ class Chatbot311:
                             })
                         except Exception:
                             pass
+                    info = {}
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org)
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
                         history.append({"role": "assistant", "content": assistant_response})
                     finally:
                         if node_id:
@@ -922,7 +932,8 @@ class Chatbot311:
                         PromptServer.instance.send_sync("chatbot311-update-history", {
                             "node_id": node_id,
                             "history": history,
-                            "clear_draft": has_draft
+                            "clear_draft": has_draft,
+                            "model": info.get("model", model)
                         })
                     except Exception as e:
                         LOG.error("Failed to emit websocket update: %s", e)
@@ -1047,8 +1058,9 @@ class Chatbot311:
                             })
                         except Exception:
                             pass
+                    info = {}
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org)
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
                         history.append({"role": "assistant", "content": assistant_response})
                     finally:
                         if node_id:
@@ -1072,7 +1084,8 @@ class Chatbot311:
                         try:
                             PromptServer.instance.send_sync("chatbot311-update-history", {
                                 "node_id": node_id,
-                                "history": history
+                                "history": history,
+                                "model": info.get("model", model)
                             })
                         except Exception:
                             pass
@@ -1125,6 +1138,13 @@ class Chatbot311:
                 end = kwargs.get(f"ending_delimiter_{i}", f"</prompt_{i}>")
                 delim_val = extract_delimited_content(last_llm_message, start, end)
             delim_outs.append(delim_val)
+
+        # Resolve the model name
+        model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+        actual_model = info.get("model") if 'info' in locals() and "model" in info else ui_widget.get("config", {}).get("lastUsedModel", model)
+        if "config" not in ui_widget or not isinstance(ui_widget["config"], dict):
+            ui_widget["config"] = {}
+        ui_widget["config"]["lastUsedModel"] = actual_model
 
         ui_widget["history"] = history
         if "draft" in ui_widget:

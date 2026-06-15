@@ -471,6 +471,7 @@ class ChatbotUI {
     this.isGenerating = false;
     this.undoStack = [];
     this.undoBtn = null;
+    this.lastUsedModel = "gemini-3.5-flash";
     
     this.buildUI();
     this.setupEventListeners();
@@ -712,9 +713,12 @@ class ChatbotUI {
     });
     
     api.addEventListener("chatbot311-update-history", (event) => {
-      const { node_id, history, clear_draft } = event.detail;
+      const { node_id, history, clear_draft, model } = event.detail;
       if (String(node_id) === String(this.node.id)) {
         this.history = history;
+        if (model) {
+          this.updateModelBadge(model);
+        }
         this.renderMessages();
         if (clear_draft && this.textarea) {
           this.textarea.value = "";
@@ -1200,6 +1204,15 @@ class ChatbotUI {
         this.undoStack = [];
         this.updateUndoButtonVisibility();
         this.renderMessages();
+        
+        if (data.model) {
+          this.updateModelBadge(data.model);
+        } else if (data.config && data.config.lastUsedModel) {
+          this.updateModelBadge(data.config.lastUsedModel);
+        } else {
+          this.updateModelBadge("gemini-3.5-flash");
+        }
+        
         this.updateNodeValue();
         this.container.classList.remove("sidebar-open");
         this.fetchConversations();
@@ -1232,7 +1245,8 @@ class ChatbotUI {
         body: JSON.stringify({
           id: this.currentChatId,
           name: this.chatName,
-          history: this.history
+          history: this.history,
+          model: this.lastUsedModel
         })
       });
       if (response.ok) {
@@ -1486,6 +1500,39 @@ class ChatbotUI {
     }
   }
   
+  updateModelBadge(modelName) {
+    const badge = this.container.querySelector("#model-badge");
+    if (!badge) return;
+    
+    let friendlyName = "Gemini 3.5";
+    if (modelName) {
+      const lower = modelName.toLowerCase();
+      if (lower.includes("gemini-3.5-flash") || lower.includes("gemini-3-5-flash")) {
+        friendlyName = "Gemini 3.5 Flash";
+      } else if (lower.includes("gemini-3.1-flash-lite") || lower.includes("gemini-3-1-flash-lite")) {
+        friendlyName = "Gemini 3.1 Flash";
+      } else if (lower.includes("gemini-3.1-pro")) {
+        friendlyName = "Gemini 3.1 Pro";
+      } else if (lower.includes("gemini-2.5-flash")) {
+        friendlyName = "Gemini 2.5 Flash";
+      } else if (lower.includes("gemini-2.5-pro")) {
+        friendlyName = "Gemini 2.5 Pro";
+      } else {
+        friendlyName = modelName
+          .replace(/-/g, " ")
+          .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+        if (!friendlyName.startsWith("Gemini")) {
+          friendlyName = "Gemini " + friendlyName;
+        }
+      }
+    }
+    badge.textContent = friendlyName;
+    if (this.config) {
+      this.config.lastUsedModel = modelName;
+    }
+    this.lastUsedModel = modelName;
+  }
+  
   setValue(val) {
     if (!val) return;
     let history = [];
@@ -1515,6 +1562,11 @@ class ChatbotUI {
     
     this.history = history;
     this.config = config;
+    if (this.config && this.config.lastUsedModel) {
+      this.updateModelBadge(this.config.lastUsedModel);
+    } else {
+      this.updateModelBadge("gemini-3.5-flash");
+    }
     if (this.textarea) {
       this.textarea.value = draft;
       this.textarea.style.height = "auto";
@@ -2042,6 +2094,10 @@ class ChatbotUI {
               accumulated += delta;
               textSpan.innerHTML = parseMarkdown(accumulated, this.getDelimiters());
               this.scrollBottom();
+              
+              if (parsed.model) {
+                this.updateModelBadge(parsed.model);
+              }
             } catch (e) {
               // Suppress partial chunk errors
             }
@@ -2169,6 +2225,9 @@ class ChatbotUI {
   }
   
   updateNodeValue(skipTrigger = false) {
+    if (this.config) {
+      this.config.lastUsedModel = this.lastUsedModel;
+    }
     const val = JSON.stringify({
       config: this.config,
       history: this.history,
@@ -2539,6 +2598,9 @@ app.registerExtension({
             return 250;
           },
           getValue() {
+            if (chatbot.config) {
+              chatbot.config.lastUsedModel = chatbot.lastUsedModel;
+            }
             return {
               config: chatbot.config,
               history: chatbot.history,
@@ -2552,6 +2614,9 @@ app.registerExtension({
             chatbot.setValue(val);
           },
           getState() {
+            if (chatbot.config) {
+              chatbot.config.lastUsedModel = chatbot.lastUsedModel;
+            }
             return {
               config: chatbot.config,
               history: chatbot.history,

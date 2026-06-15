@@ -56,16 +56,19 @@ async def proxy_service(request: web.Request) -> web.Response:
                 
                 model = body.get("model") or cfg.get("default_model", "gemini-3.5-flash")
                 
+                info = {}
                 loop = asyncio.get_event_loop()
                 def run_sync():
                     return query_gemini_sync(
                         history=history,
                         model=model,
                         use_comfyui_credits=True,
-                        auth_token_comfy_org=auth_token
+                        auth_token_comfy_org=auth_token,
+                        info=info
                     )
                 
                 response_text = await loop.run_in_executor(None, run_sync)
+                actual_model = info.get("model", model)
                 
                 if body.get("stream"):
                     sresp = web.StreamResponse(status=200, reason="OK")
@@ -78,7 +81,7 @@ async def proxy_service(request: web.Request) -> web.Response:
                         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
                         "object": "chat.completion.chunk",
                         "created": int(time()),
-                        "model": model,
+                        "model": actual_model,
                         "choices": [{
                             "index": 0,
                             "delta": {"content": response_text},
@@ -96,7 +99,7 @@ async def proxy_service(request: web.Request) -> web.Response:
                         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
                         "object": "chat.completion",
                         "created": int(time()),
-                        "model": model,
+                        "model": actual_model,
                         "choices": [{
                             "index": 0,
                             "message": {
@@ -272,16 +275,19 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
                 
                 model = body.get("model") or cfg.get("default_model", "gemini-3.5-flash")
                 
+                info = {}
                 loop = asyncio.get_event_loop()
                 def run_sync():
                     return query_gemini_sync(
                         history=history,
                         model=model,
                         use_comfyui_credits=True,
-                        auth_token_comfy_org=auth_token
+                        auth_token_comfy_org=auth_token,
+                        info=info
                     )
                 
                 response_text = await loop.run_in_executor(None, run_sync)
+                actual_model = info.get("model", model)
                 
                 if body.get("stream"):
                     sresp = web.StreamResponse(status=200, reason="OK")
@@ -294,7 +300,7 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
                         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
                         "object": "chat.completion.chunk",
                         "created": int(time()),
-                        "model": model,
+                        "model": actual_model,
                         "choices": [{
                             "index": 0,
                             "delta": {"content": response_text},
@@ -312,7 +318,7 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
                         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
                         "object": "chat.completion",
                         "created": int(time()),
-                        "model": model,
+                        "model": actual_model,
                         "choices": [{
                             "index": 0,
                             "message": {
@@ -478,7 +484,9 @@ async def save_conversation(request: web.Request) -> web.Response:
             "history": history,
             "updated_at": updated_at
         }
-        
+        if "model" in body:
+            data["model"] = body["model"]
+            
         file_path = CONVS_DIR / f"{conv_id}.json"
         file_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         
