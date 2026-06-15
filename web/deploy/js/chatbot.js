@@ -2877,6 +2877,16 @@ app.registerExtension({
           
           updateNodeLayout();
 
+          // Set defaults for seed and control_after_generate on creation
+          const seedW = node.widgets?.find(w => w && w.name === "seed");
+          const controlW = node.widgets?.find(w => w && (w.name === "control_after_generate" || w.name === "control after generate"));
+          if (controlW && (controlW.value === undefined || controlW.value === "fixed")) {
+            controlW.value = "increment";
+          }
+          if (seedW && seedW.value === undefined) {
+            seedW.value = 0;
+          }
+
           // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
           if (node.size && node.size[1] > 3000) {
             node.setSize([380, 580]);
@@ -3137,6 +3147,22 @@ app.registerExtension({
           if (node.chatbotUI) {
             node.chatbotUI.checkAPIStatus();
           }
+          
+          // Post-configure sanitization:
+          // If "control_after_generate" ended up with a number (like 13) or invalid value due to positional shifts,
+          // reset it to "increment" and set seed to 0.
+          const seedW = (node.widgets || []).find(w => w && w.name === "seed");
+          const controlW = (node.widgets || []).find(w => w && (w.name === "control_after_generate" || w.name === "control after generate"));
+          if (controlW) {
+            const val = controlW.value;
+            if (typeof val === "number" || !["fixed", "increment", "decrement", "randomize"].includes(val)) {
+              controlW.value = "increment";
+              if (seedW) {
+                seedW.value = 0;
+              }
+            }
+          }
+
           if (node.size && node.size[1] > 3000) {
             node.setSize([380, 580]);
           }
