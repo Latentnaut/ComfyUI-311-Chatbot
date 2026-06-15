@@ -2818,132 +2818,84 @@ app.registerExtension({
           }
         }, 100);
         
+        node.onSerialize = function(data) {
+          if (node.widgets) {
+            data.widgets_values_by_name = {};
+            for (const w of node.widgets) {
+              if (w && w.name) {
+                data.widgets_values_by_name[w.name] = w.value;
+              }
+            }
+          }
+        };
+
         const originalConfigure = node.onConfigure;
         node.onConfigure = function(data) {
           const res = originalConfigure ? originalConfigure.apply(this, arguments) : undefined;
           
-          if (data && data.widgets_values) {
-            const vals = data.widgets_values;
-            
-            // Determine layout version by the index of the first number widget
-            const firstNumberIndex = vals.findIndex(v => typeof v === "number");
-            const isNewLayout = firstNumberIndex === 3;
-            
-            let loadedModeVal = null;
-            let loadedSoundAlertVal = null;
-            let loadedAPIKeyVal = null;
-            let loadedSeedVal = null;
-            let loadedNumDelimitersVal = null;
-            let loadedUseCreditsVal = null;
-            let loadedHistoryVal = null;
-            
-            if (isNewLayout) {
-              // New layout order: mode, sound_alert, api_key, seed, number_of_delimiters, ...
-              loadedModeVal = vals[0];
-              loadedSoundAlertVal = vals[1];
-              loadedAPIKeyVal = vals[2];
-              loadedSeedVal = vals[3];
-              loadedNumDelimitersVal = vals[4];
+          if (data) {
+            // Priority 1: Restore by name if saved by name
+            if (data.widgets_values_by_name) {
+              const byName = data.widgets_values_by_name;
+              for (const w of node.widgets || []) {
+                if (w && w.name && byName[w.name] !== undefined) {
+                  w.value = byName[w.name];
+                }
+              }
+              // Verify/heal delimiters
+              const numDelimW = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
+              const count = numDelimW ? (parseInt(numDelimW.value) || 1) : 1;
+              for (let i = 1; i <= 20; i++) {
+                const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
+                const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
+                if (startW && (byName[`starting_delimiter_${i}`] === undefined || !byName[`starting_delimiter_${i}`])) {
+                  startW.value = `<prompt_${i}>`;
+                }
+                if (endW && (byName[`ending_delimiter_${i}`] === undefined || !byName[`ending_delimiter_${i}`])) {
+                  endW.value = `</prompt_${i}>`;
+                }
+              }
+            } 
+            // Priority 2: Robust heuristic fallback for older workflows (positional only)
+            else if (data.widgets_values) {
+              const vals = data.widgets_values;
               
-              // use_comfyui_credits is the last boolean before history/draft
-              const booleans = vals.map((v, idx) => ({val: v, idx})).filter(o => typeof o.val === "boolean");
-              if (booleans.length >= 2) {
-                loadedUseCreditsVal = booleans[booleans.length - 1].val;
-              }
-            } else {
-              // Old layout order: mode, sound_alert, number_of_delimiters, api_key, seed, use_comfyui_credits, ...
-              loadedModeVal = vals[0];
-              loadedSoundAlertVal = vals[1];
-              loadedNumDelimitersVal = vals[2];
-              loadedAPIKeyVal = vals[3];
-              loadedSeedVal = vals[4];
-              loadedUseCreditsVal = vals[5];
-            }
-            
-            // Find history value (which is a JSON string starting with { or [)
-            vals.forEach(val => {
-              if (val && typeof val === "string") {
-                const trimmed = val.trim();
-                if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                  loadedHistoryVal = val;
+              // 1. Identify delimiters start in the values array
+              let firstDelimIndex = -1;
+              for (let i = 2; i < vals.length; i++) {
+                const v = vals[i];
+                if (typeof v === "string") {
+                  const trimmed = v.trim();
+                  if (trimmed.startsWith("<") || trimmed.includes("prompt_") || /^<\/?[a-z_]+\d*>$/i.test(trimmed)) {
+                    firstDelimIndex = i;
+                    break;
+                  }
                 }
               }
-            });
-            
-            if (loadedHistoryVal !== null) {
-              const chatWidget = (node.widgets || []).find(w => w && w.name === "ui_widget");
-              if (chatWidget) {
-                chatWidget.value = loadedHistoryVal;
-                if (node.chatbotUI) {
-                  node.chatbotUI.setValue(loadedHistoryVal);
+              
+              let loadedModeVal = null;
+              let loadedSoundAlertVal = null;
+              let loadedAPIKeyVal = null;
+              let loadedSeedVal = null;
+              let loadedNumDelimitersVal = null;
+              let loadedUseCreditsVal = null;
+              let loadedHistoryVal = null;
+              
+              const controlVals = firstDelimIndex !== -1 ? vals.slice(0, firstDelimIndex) : vals;
+              
+              const numIndices = [];
+              controlVals.forEach((v, idx) => {
+                if (typeof v === "number") {
+                  numIndices.push(idx);
                 }
-              }
-            }
-            if (loadedModeVal !== null) {
-              const modeWidget = (node.widgets || []).find(w => w && w.name === "mode");
-              if (modeWidget) {
-                let normMode = loadedModeVal;
-                if (normMode === "Interactive Chat (Pause)") normMode = "LLM Chat (Pause & Confirm)";
-                else if (normMode === "One-Shot Prompt") normMode = "LLM One-Shot (Immediate)";
-                else if (normMode === "LLM Disabled (Manual)") normMode = "Manual (Pause & Confirm)";
-                else if (normMode === "Pass Last Output (Bypass)") normMode = "Bypass (Pass Last Output)";
-                modeWidget.value = normMode;
-              }
-            }
-            if (loadedSoundAlertVal !== null) {
-              const soundAlertWidget = (node.widgets || []).find(w => w && w.name === "sound_alert");
-              if (soundAlertWidget) {
-                soundAlertWidget.value = loadedSoundAlertVal;
-              }
-            }
-            if (loadedAPIKeyVal !== null) {
-              const apiKeyWidget = (node.widgets || []).find(w => w && w.name === "api_key");
-              if (apiKeyWidget) {
-                apiKeyWidget.value = String(loadedAPIKeyVal);
-              }
-            }
-            if (loadedUseCreditsVal !== null) {
-              const useCreditsWidget = (node.widgets || []).find(w => w && w.name === "use_comfyui_credits");
-              if (useCreditsWidget) {
-                useCreditsWidget.value = loadedUseCreditsVal;
-              }
-            }
-            if (loadedNumDelimitersVal !== null) {
-              const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
-              if (numDelimWidget) {
-                numDelimWidget.value = loadedNumDelimitersVal;
-              }
-            }
-            if (loadedSeedVal !== null) {
-              const seedWidget = (node.widgets || []).find(w => w && w.name === "seed");
-              if (seedWidget) {
-                seedWidget.value = loadedSeedVal;
-              }
-            }
-            
-            // Clean up api_key if LiteGraph positional shift corrupted it with delimiter values
-            const apiKeyW = (node.widgets || []).find(w => w && w.name === "api_key");
-            if (apiKeyW) {
-              const akVal = String(apiKeyW.value || "").trim();
-              if (/^<\/?[a-z_]+\d*>$/i.test(akVal)) {
-                apiKeyW.value = "";
-              }
-            }
-
-            // Clean up shifted values if they got corrupted
-            const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
-            if (numDelimWidget) {
-              const numVal = parseInt(numDelimWidget.value);
-              if (isNaN(numVal) || numVal < 1 || numVal > 20) {
-                numDelimWidget.value = 1;
-              } else {
-                numDelimWidget.value = numVal;
-              }
-            }
-            
-            for (let i = 1; i <= 20; i++) {
-              const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
-              const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
+              });
+              
+              const boolIndices = [];
+              controlVals.forEach((v, idx) => {
+                if (typeof v === "boolean") {
+                  boolIndices.push(idx);
+                }
+              });
               
               const invalidDelimVals = [
                 "Interactive Chat (Pause)", 
@@ -2954,46 +2906,175 @@ app.registerExtension({
                 "LLM One-Shot (Immediate)",
                 "Manual (Pause & Confirm)",
                 "Manual One-Shot (Immediate)",
-                "Bypass (Pass Last Output)"
+                "Bypass (Pass Last Output)",
+                "fixed", "increment", "decrement", "randomize"
               ];
-
-              if (startW) {
-                const val = String(startW.value || "").trim();
-                if (!val || 
-                    val.startsWith("{") || 
-                    val.startsWith("[") || 
-                    invalidDelimVals.includes(val) || 
-                    val === "true" || 
-                    val === "false") {
-                  startW.value = `<prompt_${i}>`;
+              
+              loadedModeVal = controlVals[0];
+              if (boolIndices.length > 0) {
+                loadedSoundAlertVal = controlVals[boolIndices[0]];
+              }
+              
+              if (numIndices.includes(2)) {
+                loadedNumDelimitersVal = controlVals[2];
+                if (numIndices.includes(4)) {
+                  loadedSeedVal = controlVals[4];
+                }
+                if (typeof controlVals[3] === "string" && !invalidDelimVals.includes(controlVals[3])) {
+                  loadedAPIKeyVal = controlVals[3];
+                }
+              } else if (numIndices.includes(3)) {
+                loadedSeedVal = controlVals[3];
+                if (numIndices.includes(5)) {
+                  loadedNumDelimitersVal = controlVals[5];
+                } else if (numIndices.includes(4)) {
+                  loadedNumDelimitersVal = controlVals[4];
+                }
+                if (typeof controlVals[2] === "string" && !invalidDelimVals.includes(controlVals[2])) {
+                  loadedAPIKeyVal = controlVals[2];
+                }
+              } else {
+                const numbers = controlVals.filter(v => typeof v === "number");
+                if (numbers.length >= 2) {
+                  if (controlVals.length > 5) {
+                    loadedSeedVal = numbers[0];
+                    loadedNumDelimitersVal = numbers[1];
+                  } else {
+                    loadedNumDelimitersVal = numbers[0];
+                    loadedSeedVal = numbers[1];
+                  }
+                } else if (numbers.length === 1) {
+                  loadedNumDelimitersVal = numbers[0];
                 }
               }
               
-              if (endW) {
-                const val = String(endW.value || "").trim();
-                if (!val || 
-                    val.startsWith("{") || 
-                    val.startsWith("[") || 
-                    invalidDelimVals.includes(val) || 
-                    val === "true" || 
-                    val === "false") {
-                  endW.value = `</prompt_${i}>`;
+              let count = parseInt(loadedNumDelimitersVal);
+              if (isNaN(count) || count < 1 || count > 20) {
+                count = 1;
+              }
+              loadedNumDelimitersVal = count;
+              
+              if (firstDelimIndex !== -1) {
+                const postDelimVals = vals.slice(firstDelimIndex);
+                const postBooleans = postDelimVals.filter(v => typeof v === "boolean");
+                if (postBooleans.length > 0) {
+                  loadedUseCreditsVal = postBooleans[0];
+                }
+              }
+              
+              vals.forEach(val => {
+                if (val && typeof val === "string") {
+                  const trimmed = val.trim();
+                  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                    loadedHistoryVal = val;
+                  }
+                }
+              });
+              
+              if (loadedHistoryVal !== null) {
+                const chatWidget = (node.widgets || []).find(w => w && w.name === "ui_widget");
+                if (chatWidget) {
+                  chatWidget.value = loadedHistoryVal;
+                  if (node.chatbotUI) {
+                    node.chatbotUI.setValue(loadedHistoryVal);
+                  }
+                }
+              }
+              if (loadedModeVal !== null) {
+                const modeWidget = (node.widgets || []).find(w => w && w.name === "mode");
+                if (modeWidget) {
+                  let normMode = loadedModeVal;
+                  if (normMode === "Interactive Chat (Pause)") normMode = "LLM Chat (Pause & Confirm)";
+                  else if (normMode === "One-Shot Prompt") normMode = "LLM One-Shot (Immediate)";
+                  else if (normMode === "LLM Disabled (Manual)") normMode = "Manual (Pause & Confirm)";
+                  else if (normMode === "Pass Last Output (Bypass)") normMode = "Bypass (Pass Last Output)";
+                  modeWidget.value = normMode;
+                }
+              }
+              if (loadedSoundAlertVal !== null) {
+                const soundAlertWidget = (node.widgets || []).find(w => w && w.name === "sound_alert");
+                if (soundAlertWidget) {
+                  soundAlertWidget.value = loadedSoundAlertVal;
+                }
+              }
+              if (loadedAPIKeyVal !== null) {
+                const apiKeyWidget = (node.widgets || []).find(w => w && w.name === "api_key");
+                if (apiKeyWidget) {
+                  apiKeyWidget.value = String(loadedAPIKeyVal);
+                }
+              }
+              if (loadedUseCreditsVal !== null) {
+                const useCreditsWidget = (node.widgets || []).find(w => w && w.name === "use_comfyui_credits");
+                if (useCreditsWidget) {
+                  useCreditsWidget.value = loadedUseCreditsVal;
+                }
+              }
+              if (loadedNumDelimitersVal !== null) {
+                const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
+                if (numDelimWidget) {
+                  numDelimWidget.value = loadedNumDelimitersVal;
+                }
+              }
+              if (loadedSeedVal !== null) {
+                const seedWidget = (node.widgets || []).find(w => w && w.name === "seed");
+                if (seedWidget) {
+                  seedWidget.value = loadedSeedVal;
+                }
+              }
+              
+              const apiKeyW = (node.widgets || []).find(w => w && w.name === "api_key");
+              if (apiKeyW) {
+                const akVal = String(apiKeyW.value || "").trim();
+                if (/^<\/?[a-z_]+\d*>$/i.test(akVal)) {
+                  apiKeyW.value = "";
+                }
+              }
+              
+              if (firstDelimIndex !== -1) {
+                let delimValIdx = firstDelimIndex;
+                for (let i = 1; i <= 20; i++) {
+                  const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
+                  const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
+                  
+                  if (startW) {
+                    const savedVal = vals[delimValIdx];
+                    if (savedVal !== undefined) {
+                      if (typeof savedVal === "string" && !invalidDelimVals.includes(savedVal) && !savedVal.startsWith("{") && !savedVal.startsWith("[")) {
+                        startW.value = savedVal;
+                      } else {
+                        startW.value = `<prompt_${i}>`;
+                      }
+                      delimValIdx++;
+                    } else {
+                      startW.value = `<prompt_${i}>`;
+                    }
+                  }
+                  
+                  if (endW) {
+                    const savedVal = vals[delimValIdx];
+                    if (savedVal !== undefined) {
+                      if (typeof savedVal === "string" && !invalidDelimVals.includes(savedVal) && !savedVal.startsWith("{") && !savedVal.startsWith("[")) {
+                        endW.value = savedVal;
+                      } else {
+                        endW.value = `</prompt_${i}>`;
+                      }
+                      delimValIdx++;
+                    } else {
+                      endW.value = `</prompt_${i}>`;
+                    }
+                  }
                 }
               }
             }
           }
           
           updateNodeLayout();
-
           if (node.chatbotUI) {
             node.chatbotUI.checkAPIStatus();
           }
-
-          // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
           if (node.size && node.size[1] > 3000) {
             node.setSize([380, 580]);
           }
-          
           return res;
         };
         
