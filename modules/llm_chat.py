@@ -886,6 +886,17 @@ class Chatbot311:
             }
             history.append(user_message)
             
+            # Send intermediate update so the client displays the user's input/images immediately
+            if node_id:
+                try:
+                    PromptServer.instance.send_sync("chatbot311-update-history", {
+                        "node_id": node_id,
+                        "history": history,
+                        "clear_draft": has_draft
+                    })
+                except Exception as e:
+                    LOG.error("Failed to emit intermediate user message update: %s", e)
+            
             # Query Gemini synchronously
             if actual_mode in ("LLM Chat (Pause & Confirm)", "LLM One-Shot (Immediate)"):
                 if should_query_llm:
