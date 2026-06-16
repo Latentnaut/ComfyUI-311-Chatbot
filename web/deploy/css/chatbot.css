@@ -1371,3 +1371,47 @@
   transform: scale(0.95);
 }
 
+/* Sidebar Footer & Delete All Button */
+.chatbot311-sidebar-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--cb311-border);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(10, 10, 12, 0.2);
+}
+
+.chatbot311-btn-delete-all {
+  background: transparent;
+  border: none;
+  color: var(--cb311-text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 4px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+}
+
+.chatbot311-btn-delete-all svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.chatbot311-btn-delete-all:hover {
+  color: #f87171; /* soft red */
+  background-color: rgba(239, 68, 68, 0.08);
+}
+
+.chatbot311-btn-delete-all:active {
+  transform: scale(0.98);
+}
+

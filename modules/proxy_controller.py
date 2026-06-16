@@ -508,6 +508,19 @@ async def delete_conversation(request: web.Request) -> web.Response:
         LOG.exception("Failed deleting conversation %s: %s", conv_id, e)
         return web.json_response({"detail": "error", "error": str(e)}, status=500)
 
+@PromptServer.instance.routes.delete(f"{API_ROUTE_PREFIX}/conversations")
+async def delete_all_conversations(request: web.Request) -> web.Response:
+    try:
+        for p in CONVS_DIR.glob("*.json"):
+            try:
+                p.unlink()
+            except Exception:
+                LOG.error(f"Failed to delete conversation file: {p.name}")
+        return web.json_response({"status": "success"})
+    except Exception as e:
+        LOG.exception("Failed deleting all conversations: %s", e)
+        return web.json_response({"detail": "error", "error": str(e)}, status=500)
+
 @PromptServer.instance.routes.get(f"{API_ROUTE_PREFIX}/system-prompt")
 async def get_default_system_prompt(request: web.Request) -> web.Response:
     try:

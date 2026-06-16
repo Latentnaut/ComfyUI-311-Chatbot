@@ -432,7 +432,14 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
         raise Exception(f"Gemini API returned error {e.code}: {err_text}")
     except Exception as e:
         LOG.error("Failed to query Gemini API: %s", e)
-        raise Exception(f"Failed to query Gemini API: {str(e)}")
+        err_msg = str(e)
+        if "getaddrinfo failed" in err_msg or "11001" in err_msg:
+            raise Exception(
+                f"Failed to query Gemini API: {err_msg}. This network error usually occurs when the host cannot be resolved. "
+                "If your credentials or API key are defined in an external node, make sure to execute the FULL workflow (Queue Prompt) "
+                "rather than running only this group/node, so that the API key is successfully propagated."
+            )
+        raise Exception(f"Failed to query Gemini API: {err_msg}")
 
 def extract_delimited_content(text: str, start: str, end: str) -> str:
     if not text or not start:
@@ -862,15 +869,17 @@ class Chatbot311:
                         })
                         has_new_input = True
         # Check if we should skip auto-execution in interactive/manual pause modes when there is no graph prompt or UI draft
+        should_query_llm = True
         if actual_mode in ("LLM Chat (Pause & Confirm)", "Manual (Pause & Confirm)") and not prompt_str.strip() and not has_draft:
-            has_new_input = False
+            if image is not None:
+                # We have input images in a pause-and-confirm mode.
+                # Display the images in the chat history without query or text description,
+                # so the user can see them and type their prompt.
+                should_query_llm = False
+            else:
+                has_new_input = False
 
         if has_new_input and is_really_new:
-            if image is not None and not prompt_str and not has_draft:
-                num_imgs = len(image) if len(image.shape) == 4 else 1
-                desc_text = "Describe this image." if num_imgs <= 1 else "Describe these images."
-                user_parts.insert(0, {"type": "text", "text": desc_text})
-                
             user_message = {
                 "role": "user",
                 "content": user_parts if len(user_parts) > 1 else (user_parts[0]["text"] if user_parts[0]["type"] == "text" else user_parts)
@@ -879,97 +888,129 @@ class Chatbot311:
             
             # Query Gemini synchronously
             if actual_mode in ("LLM Chat (Pause & Confirm)", "LLM One-Shot (Immediate)"):
-                try:
-                    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-                    
-                    # Prepend system prompt to temp list for API call
-                    api_messages = []
-                    if system and system.strip():
-                        api_messages.append({"role": "system", "content": system.strip()})
-                    
-                    for msg in history:
-                        api_messages.append({
-                            "role": msg.get("role"),
-                            "content": msg.get("content")
-                        })
-                    ensure_latest_user_message_has_image(api_messages)
-                    
-                    LOG.info(f"Querying Gemini ({model}) with system instruction...")
-                    if node_id:
-                        try:
-                            PromptServer.instance.send_sync("chatbot311-show-typing", {
-                                "node_id": node_id,
-                                "show": True
-                            })
-                        except Exception:
-                            pass
-                    info = {}
+                if should_query_llm:
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
-                        history.append({"role": "assistant", "content": assistant_response})
-                    finally:
+                        model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+                        
+                        # Prepend system prompt to temp list for API call
+                        api_messages = []
+                        if system and system.strip():
+                            api_messages.append({"role": "system", "content": system.strip()})
+                        
+                        for msg in history:
+                            api_messages.append({
+                                "role": msg.get("role"),
+                                "content": msg.get("content")
+                            })
+                        ensure_latest_user_message_has_image(api_messages)
+                        
+                        LOG.info(f"Querying Gemini ({model}) with system instruction...")
                         if node_id:
                             try:
                                 PromptServer.instance.send_sync("chatbot311-show-typing", {
                                     "node_id": node_id,
-                                    "show": False
+                                    "show": True
                                 })
                             except Exception:
                                 pass
-                except Exception as e:
-                    err_msg = str(e)
-                    if "API key not valid" in err_msg or "valid API key" in err_msg:
-                        friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
-                    elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
-                        friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
-                    else:
-                        friendly = f"Execution Error: {err_msg}"
-                    history.append({"role": "assistant", "content": friendly})
-                
-                # Send websocket update back to frontend chat panel so it syncs instantly without reload
-                if node_id:
-                    try:
-                        PromptServer.instance.send_sync("chatbot311-update-history", {
-                            "node_id": node_id,
-                            "history": history,
-                            "clear_draft": has_draft,
-                            "model": info.get("model", model)
-                        })
+                        info = {}
+                        try:
+                            assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
+                            history.append({"role": "assistant", "content": assistant_response})
+                        finally:
+                            if node_id:
+                                try:
+                                    PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                        "node_id": node_id,
+                                        "show": False
+                                    })
+                                except Exception:
+                                    pass
                     except Exception as e:
-                        LOG.error("Failed to emit websocket update: %s", e)
+                        err_msg = str(e)
+                        if "API key not valid" in err_msg or "valid API key" in err_msg:
+                            friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
+                        elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
+                            friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
+                        elif "getaddrinfo failed" in err_msg or "11001" in err_msg:
+                            friendly = (
+                                "⚠️ **Connection / API Key Error:** Failed to resolve the Gemini API host (getaddrinfo failed). "
+                                "This network error usually indicates that the hostname could not be resolved.\n\n"
+                                "**Solution:** If your API key is defined in an external node (e.g., outside this group), "
+                                "please ensure you execute the **FULL workflow** (Queue Prompt) rather than running only this group/node, "
+                                "so that all credentials and inputs are properly propagated."
+                            )
+                        else:
+                            friendly = f"Execution Error: {err_msg}"
+                        history.append({"role": "assistant", "content": friendly})
+                    
+                    # Send websocket update back to frontend chat panel so it syncs instantly without reload
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": has_draft,
+                                "model": info.get("model", model)
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
+                else:
+                    # Just update the history with the images so the frontend shows them
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": False
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
             elif actual_mode in ("Manual (Pause & Confirm)", "Manual One-Shot (Immediate)"):
-                # Wrap the user's text in the first active delimiter
-                num_delimiters = kwargs.get("number_of_delimiters", 1)
-                if isinstance(num_delimiters, list):
-                    num_delimiters = num_delimiters[0]
-                count = int(num_delimiters)
-                start_d = "<prompt_1>"
-                end_d = "</prompt_1>"
-                if count >= 1:
-                    start_d = kwargs.get("starting_delimiter_1", "<prompt_1>")
-                    end_d = kwargs.get("ending_delimiter_1", "</prompt_1>")
-                
-                # Get the plain text from user_parts
-                user_text = ""
-                for part in user_parts:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        user_text += part.get("text", "")
-                    elif isinstance(part, str):
-                        user_text += part
-                
-                wrapped_text = f"{start_d}\n{user_text.strip()}\n{end_d}"
-                history.append({"role": "assistant", "content": wrapped_text})
-                
-                # Send websocket update back to frontend chat panel so it syncs instantly without reload
-                if node_id:
-                    try:
-                        PromptServer.instance.send_sync("chatbot311-update-history", {
-                            "node_id": node_id,
-                            "history": history,
-                            "clear_draft": has_draft
-                        })
-                    except Exception as e:
-                        LOG.error("Failed to emit websocket update: %s", e)
+                if should_query_llm:
+                    # Wrap the user's text in the first active delimiter
+                    num_delimiters = kwargs.get("number_of_delimiters", 1)
+                    if isinstance(num_delimiters, list):
+                        num_delimiters = num_delimiters[0]
+                    count = int(num_delimiters)
+                    start_d = "<prompt_1>"
+                    end_d = "</prompt_1>"
+                    if count >= 1:
+                        start_d = kwargs.get("starting_delimiter_1", "<prompt_1>")
+                        end_d = kwargs.get("ending_delimiter_1", "</prompt_1>")
+                    
+                    # Get the plain text from user_parts
+                    user_text = ""
+                    for part in user_parts:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            user_text += part.get("text", "")
+                        elif isinstance(part, str):
+                            user_text += part
+                    
+                    wrapped_text = f"{start_d}\n{user_text.strip()}\n{end_d}"
+                    history.append({"role": "assistant", "content": wrapped_text})
+                    
+                    # Send websocket update back to frontend chat panel so it syncs instantly without reload
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": has_draft
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
+                else:
+                    # Just update the history with the images so the frontend shows them
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": False
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
             
             # Update cache of last processed inputs in global cache
             node_cache = NODE_INPUT_CACHE.setdefault(node_id, {
@@ -1077,6 +1118,14 @@ class Chatbot311:
                         friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
                     elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
                         friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
+                    elif "getaddrinfo failed" in err_msg or "11001" in err_msg:
+                        friendly = (
+                            "⚠️ **Connection / API Key Error:** Failed to resolve the Gemini API host (getaddrinfo failed). "
+                            "This network error usually indicates that the hostname could not be resolved.\n\n"
+                            "**Solution:** If your API key is defined in an external node (e.g., outside this group), "
+                            "please ensure you execute the **FULL workflow** (Queue Prompt) rather than running only this group/node, "
+                            "so that all credentials and inputs are properly propagated."
+                        )
                     else:
                         friendly = f"Execution Error: {err_msg}"
                     history.append({"role": "assistant", "content": friendly})

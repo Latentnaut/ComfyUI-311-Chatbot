@@ -492,6 +492,12 @@ class ChatbotUI {
           <button class="chatbot311-btn-menu" id="btn-close-sidebar" title="Close Sidebar">${xSvg}</button>
         </div>
         <div class="chatbot311-conv-list" id="conv-list"></div>
+        <div class="chatbot311-sidebar-footer">
+          <button class="chatbot311-btn-delete-all" id="btn-delete-all" title="Delete all conversations">
+            ${trashSvg}
+            <span>Delete all conversations</span>
+          </button>
+        </div>
       </div>
 
       <div class="chatbot311-header">
@@ -546,6 +552,7 @@ class ChatbotUI {
     
     this.sidebar = this.container.querySelector("#sidebar");
     this.convList = this.container.querySelector("#conv-list");
+    this.btnDeleteAll = this.container.querySelector("#btn-delete-all");
     this.messagesContainer = this.container.querySelector("#msg-container");
     this.previewBar = this.container.querySelector("#preview-bar");
     this.confirmBanner = this.container.querySelector("#confirm-banner");
@@ -685,6 +692,9 @@ class ChatbotUI {
     this.btnCloseSidebar.addEventListener("click", () => {
       this.container.classList.remove("sidebar-open");
     });
+    if (this.btnDeleteAll) {
+      this.btnDeleteAll.addEventListener("click", () => this.deleteAllConversations());
+    }
     
     // Close sidebar clicking outside
     this.messagesContainer.addEventListener("click", () => {
@@ -1283,6 +1293,22 @@ class ChatbotUI {
     }
   }
   
+  async deleteAllConversations() {
+    const confirmed = await this.showConfirmDialog("Are you sure you want to delete all conversations? This action cannot be undone.");
+    if (!confirmed) return;
+    
+    try {
+      const response = await fetch(`/chatbot-311/conversations`, {
+        method: "DELETE"
+      });
+      if (response.ok) {
+        this.startNewChat();
+      }
+    } catch (e) {
+      console.error("Failed deleting all conversations:", e);
+    }
+  }
+
   startNewChat() {
     this.currentChatId = 'chat_' + Math.random().toString(36).substring(2, 15);
     this.chatName = "";
@@ -1815,20 +1841,45 @@ class ChatbotUI {
     this.isGenerating = true;
     this.setSendButtonState(true);
     
-    let content = text;
-    if (allAttachments.length > 0) {
-      content = [];
-      content.push({ type: "text", text: text || "Analyze these images." });
-      allAttachments.forEach(att => {
-        content.push({
-          type: "image_url",
-          image_url: { url: att.base64 }
-        });
-      });
+    let mergedIntoLastMsg = false;
+    if (this.history.length > 0) {
+      const lastMsg = this.history[this.history.length - 1];
+      if (lastMsg.role === "user" && Array.isArray(lastMsg.content)) {
+        const hasImages = lastMsg.content.some(part => part.type === "image_url");
+        const textPartIdx = lastMsg.content.findIndex(part => part.type === "text");
+        
+        if (hasImages && textPartIdx === -1) {
+          // No text part exists, prepend the typed text
+          lastMsg.content.unshift({ type: "text", text: text || "Analyze these images." });
+          mergedIntoLastMsg = true;
+        } else if (hasImages && textPartIdx !== -1) {
+          const currentText = lastMsg.content[textPartIdx].text || "";
+          if (!currentText.trim() || currentText === "Analyze these images.") {
+            lastMsg.content[textPartIdx].text = text || "Analyze these images.";
+            mergedIntoLastMsg = true;
+          }
+        }
+      }
     }
     
-    this.history.push({ role: "user", content });
-    this.renderMessages();
+    if (mergedIntoLastMsg) {
+      this.renderMessages();
+    } else {
+      let content = text;
+      if (allAttachments.length > 0) {
+        content = [];
+        content.push({ type: "text", text: text || "Analyze these images." });
+        allAttachments.forEach(att => {
+          content.push({
+            type: "image_url",
+            image_url: { url: att.base64 }
+          });
+        });
+      }
+      
+      this.history.push({ role: "user", content });
+      this.renderMessages();
+    }
     
     this.textarea.value = "";
     this.textarea.style.height = "auto";
