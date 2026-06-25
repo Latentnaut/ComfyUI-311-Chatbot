@@ -478,6 +478,9 @@ class ChatbotUI {
     this.undoStack = [];
     this.undoBtn = null;
     this.lastUsedModel = "gemini-3.5-flash";
+    this.connectedApiKey = "";
+    this.connectedSystemGeneral = "";
+    this.connectedSystemVariable = "";
     
     this.buildUI();
     this.setupEventListeners();
@@ -748,8 +751,12 @@ class ChatbotUI {
     });
 
     api.addEventListener("chatbot311-chat-paused", (event) => {
-      const { node_id, sound_alert } = event.detail;
+      const { node_id, sound_alert, api_key, system_general, system_variable } = event.detail;
       if (String(node_id) === String(this.node.id)) {
+        if (api_key) this.connectedApiKey = api_key;
+        if (system_general) this.connectedSystemGeneral = system_general;
+        if (system_variable) this.connectedSystemVariable = system_variable;
+
         if (this.confirmBanner) {
           this.confirmBanner.style.display = "flex";
         }
@@ -787,6 +794,7 @@ class ChatbotUI {
           this.confirmBanner.style.display = "none";
         }
         this.isGenerating = false;
+        this.clearConnectedCredentials();
       } else {
         // Node started executing!
         // If there is draft text in the textarea, simulate sending it
@@ -856,6 +864,7 @@ class ChatbotUI {
       }
       this.isGenerating = false;
       this.showTypingIndicator(false);
+      this.clearConnectedCredentials();
     };
     api.addEventListener("execution_interrupted", this._onExecutionInterrupted);
 
@@ -865,6 +874,7 @@ class ChatbotUI {
       }
       this.isGenerating = false;
       this.showTypingIndicator(false);
+      this.clearConnectedCredentials();
     };
     api.addEventListener("execution_error", this._onExecutionError);
 
@@ -1029,6 +1039,7 @@ class ChatbotUI {
           if (this.confirmBanner) {
             this.confirmBanner.style.display = "none";
           }
+          this.clearConnectedCredentials();
         } else {
           console.error("Failed to resume chat:", data.error);
         }
@@ -1048,6 +1059,9 @@ class ChatbotUI {
       if (!apiKey) {
         apiKey = String(this.getConnectedInputValue("api_key") || "").trim();
       }
+      if (!apiKey && this.connectedApiKey) {
+        apiKey = this.connectedApiKey;
+      }
       if (apiKey && (
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
@@ -1058,6 +1072,7 @@ class ChatbotUI {
         apiKey = "";
       }
       const headers = {};
+      headers["X-Chatbot-Node-Id"] = this.node.id.toString();
       if (apiKey) {
         headers["X-Gemini-API-Key"] = sanitizeHeaderValue(apiKey);
       }
@@ -1342,6 +1357,12 @@ class ChatbotUI {
     this.container.classList.remove("sidebar-open");
     this.fetchConversations();
   }
+
+  clearConnectedCredentials() {
+    this.connectedApiKey = "";
+    this.connectedSystemGeneral = "";
+    this.connectedSystemVariable = "";
+  }
   
   getConnectedInputValue(inputName) {
     const inputIdx = this.node.inputs ? this.node.inputs.findIndex(input => input.name === inputName) : -1;
@@ -1460,8 +1481,16 @@ class ChatbotUI {
     }
 
     // Check connected system prompts
-    const sysGeneral = this.getConnectedInputValue("system_general");
-    const sysVariable = this.getConnectedInputValue("system_variable");
+    let sysGeneral = this.getConnectedInputValue("system_general");
+    let sysVariable = this.getConnectedInputValue("system_variable");
+    
+    if (sysGeneral === null && this.connectedSystemGeneral) {
+      sysGeneral = this.connectedSystemGeneral;
+    }
+    if (sysVariable === null && this.connectedSystemVariable) {
+      sysVariable = this.connectedSystemVariable;
+    }
+    
     const badgeSystem = this.container.querySelector("#badge-system");
     
     if (sysGeneral !== null || sysVariable !== null) {
@@ -2031,6 +2060,9 @@ class ChatbotUI {
       if (!apiKey) {
         apiKey = String(this.getConnectedInputValue("api_key") || "").trim();
       }
+      if (!apiKey && this.connectedApiKey) {
+        apiKey = this.connectedApiKey;
+      }
       if (apiKey && (
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
@@ -2041,6 +2073,7 @@ class ChatbotUI {
         apiKey = "";
       }
       const headers = { "Content-Type": "application/json" };
+      headers["X-Chatbot-Node-Id"] = this.node.id.toString();
       if (apiKey) {
         headers["X-Gemini-API-Key"] = sanitizeHeaderValue(apiKey);
       }

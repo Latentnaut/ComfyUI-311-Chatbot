@@ -1046,14 +1046,21 @@ class Chatbot311:
             CHAT_SESSIONS[node_id] = {
                 "event": event,
                 "history": history,
-                "action": None
+                "action": None,
+                "api_key": api_key,
+                "auth_token_comfy_org": auth_token_comfy_org,
+                "system_general": system_general_str,
+                "system_variable": system_variable_str
             }
             
             # Send notification to UI that we are paused and waiting for confirmation
             try:
                 PromptServer.instance.send_sync("chatbot311-chat-paused", {
                     "node_id": node_id,
-                    "sound_alert": sound_alert
+                    "sound_alert": sound_alert,
+                    "api_key": api_key,
+                    "system_general": system_general_str,
+                    "system_variable": system_variable_str
                 })
             except Exception as e:
                 LOG.error("Failed to emit pause websocket: %s", e)

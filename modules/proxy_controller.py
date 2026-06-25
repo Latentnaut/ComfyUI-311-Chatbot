@@ -15,6 +15,19 @@ from . import proxy_service as proxy_svc
 
 LOG = logging.getLogger(__name__)
 
+def _get_cached_credentials(request: web.Request):
+    node_id = request.headers.get("X-Chatbot-Node-Id", "")
+    if not node_id:
+        return "", ""
+    try:
+        from .llm_chat import CHAT_SESSIONS
+        session = CHAT_SESSIONS.get(node_id)
+        if session:
+            return session.get("api_key", ""), session.get("auth_token_comfy_org", "")
+    except Exception:
+        pass
+    return "", ""
+
 # region Proxy endpoint (POST)
 @PromptServer.instance.routes.post(f"{API_ROUTE_PREFIX}/proxy/{{service}}")
 async def proxy_service(request: web.Request) -> web.Response:
@@ -44,11 +57,19 @@ async def proxy_service(request: web.Request) -> web.Response:
         except Exception:
             body = {}
 
+        user_key = request.headers.get("X-Gemini-API-Key", "")
+        auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
+        if not user_key or not auth_token:
+            cached_key, cached_token = _get_cached_credentials(request)
+            if not user_key and cached_key:
+                user_key = cached_key
+            if not auth_token and cached_token:
+                auth_token = cached_token
+
         use_credits = (request.headers.get("X-Use-ComfyUI-Credits", "").lower() == "true")
         if use_credits:
             try:
                 from .llm_chat import query_gemini_sync
-                auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
                 
                 history = body.get("messages", [])
                 if not history and body.get("prompt"):
@@ -119,7 +140,6 @@ async def proxy_service(request: web.Request) -> web.Response:
                 LOG.warning("ComfyUI Credits failed in proxy_service (%s), falling back to custom API key...", e)
                 # Fall through to custom API key path below
 
-        user_key = request.headers.get("X-Gemini-API-Key", "")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
             cfg, body, proxypath=None, user_api_key=user_key
         )
@@ -201,8 +221,15 @@ async def proxy_service_status(request: web.Request) -> web.Response:
         reason = None
 
         user_api_key = request.headers.get("X-Gemini-API-Key", "")
-        api_env = cfg.get("api_key_env")
         auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
+        if not user_api_key or not auth_token:
+            cached_key, cached_token = _get_cached_credentials(request)
+            if not user_api_key and cached_key:
+                user_api_key = cached_key
+            if not auth_token and cached_token:
+                auth_token = cached_token
+
+        api_env = cfg.get("api_key_env")
         
         comfy_org_ready = False
         try:
@@ -263,11 +290,19 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
         except Exception:
             body = {}
 
+        user_key = request.headers.get("X-Gemini-API-Key", "")
+        auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
+        if not user_key or not auth_token:
+            cached_key, cached_token = _get_cached_credentials(request)
+            if not user_key and cached_key:
+                user_key = cached_key
+            if not auth_token and cached_token:
+                auth_token = cached_token
+
         use_credits = (request.headers.get("X-Use-ComfyUI-Credits", "").lower() == "true")
         if use_credits:
             try:
                 from .llm_chat import query_gemini_sync
-                auth_token = request.headers.get("X-Comfy-Org-Auth-Token", "")
                 
                 history = body.get("messages", [])
                 if not history and body.get("prompt"):
@@ -338,7 +373,6 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
                 LOG.warning("ComfyUI Credits failed in proxy_service_with_path (%s), falling back to custom API key...", e)
                 # Fall through to custom API key path below
 
-        user_key = request.headers.get("X-Gemini-API-Key", "")
         upstream, headers, timeout, forward_body = proxy_svc._build_upstream_and_headers(
             cfg, body, proxypath=proxypath, user_api_key=user_key
         )
