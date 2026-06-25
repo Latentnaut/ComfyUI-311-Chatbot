@@ -596,6 +596,14 @@ def ensure_latest_user_message_has_image(api_messages: list):
             else:
                 msg["content"] = ""
 
+def derive_delimiter_tags(val: str, index: int) -> tuple[str, str]:
+    if not val or not val.strip():
+        return f"<prompt_{index}>", f"</prompt_{index}>"
+    tag = val.strip().lstrip('<').rstrip('>').lstrip('/')
+    if not tag:
+        return f"<prompt_{index}>", f"</prompt_{index}>"
+    return f"<{tag}>", f"</{tag}>"
+
 # region Chatbot311
 class Chatbot311:
     @classmethod
@@ -639,8 +647,7 @@ class Chatbot311:
             }
         }
         for i in range(1, 21):
-            inputs["required"][f"starting_delimiter_{i}"] = ("STRING", {"default": f"<prompt_{i}>"})
-            inputs["required"][f"ending_delimiter_{i}"] = ("STRING", {"default": f"</prompt_{i}>"})
+            inputs["required"][f"delimiter_{i}"] = ("STRING", {"default": f"prompt_{i}"})
         inputs["required"]["use_comfyui_credits"] = ("BOOLEAN", {
             "default": True,
             "label_on": "Use ComfyUI Credits",
@@ -747,17 +754,23 @@ class Chatbot311:
         delimiters_instructions = []
         for i in range(1, 21):
             if i <= count:
-                start = kwargs.get(f"starting_delimiter_{i}", f"<prompt_{i}>")
-                end = kwargs.get(f"ending_delimiter_{i}", f"</prompt_{i}>")
+                val = kwargs.get(f"delimiter_{i}", f"prompt_{i}")
+                start, end = derive_delimiter_tags(val, i)
                 delimiters_instructions.append(f"- Delimiter {i}: Wrap the final output between '{start}' and '{end}'")
         
         if delimiters_instructions:
-            start_ex = kwargs.get('starting_delimiter_1', '<prompt_1>')
-            end_ex = kwargs.get('ending_delimiter_1', '</prompt_1>')
+            val_1 = kwargs.get("delimiter_1", "prompt_1")
+            start_ex, end_ex = derive_delimiter_tags(val_1, 1)
+            
+            variation_instruction = ""
+            if count > 1:
+                variation_instruction = "\n- **Multiple Variations**: Since you have multiple active delimiters, you MUST generate a slightly different variation or alternative version of the prompt/output for each active delimiter. Do not repeat the same content; customize each variation slightly while remaining true to the user's intent."
+
             delim_text = (
                 "### IMPORTANT: ACTIVE OUTPUT DELIMITERS\n"
                 "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST wrap the entire final output using these exact delimiters (without markdown code blocks around the delimiters themselves):\n"
                 + "\n".join(delimiters_instructions)
+                + variation_instruction
                 + f"\n\n- If your response is formatted as a JSON object, wrap the ENTIRE JSON object itself inside the delimiters. Example:\n{start_ex}\n{{\n  \"key\": \"value\"\n}}\n{end_ex}\n"
                 + f"- If your response is standard text/markdown, wrap the final prompt block inside the delimiters. Example:\n{start_ex}\nyour prompt here\n{end_ex}"
             )
@@ -941,6 +954,8 @@ class Chatbot311:
                         err_msg = str(e)
                         if "API key not valid" in err_msg or "valid API key" in err_msg:
                             friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
+                        elif any(k in err_msg.lower() for k in ("prepayment", "credits", "depleted", "billing")):
+                            friendly = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in Google AI Studio (https://aistudio.google.com/)."
                         elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
                             friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
                         elif "getaddrinfo failed" in err_msg or "11001" in err_msg:
@@ -984,11 +999,8 @@ class Chatbot311:
                     if isinstance(num_delimiters, list):
                         num_delimiters = num_delimiters[0]
                     count = int(num_delimiters)
-                    start_d = "<prompt_1>"
-                    end_d = "</prompt_1>"
-                    if count >= 1:
-                        start_d = kwargs.get("starting_delimiter_1", "<prompt_1>")
-                        end_d = kwargs.get("ending_delimiter_1", "</prompt_1>")
+                    val_1 = kwargs.get("delimiter_1", "prompt_1")
+                    start_d, end_d = derive_delimiter_tags(val_1, 1)
                     
                     # Get the plain text from user_parts
                     user_text = ""
@@ -1134,6 +1146,8 @@ class Chatbot311:
                     err_msg = str(e)
                     if "API key not valid" in err_msg or "valid API key" in err_msg:
                         friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
+                    elif any(k in err_msg.lower() for k in ("prepayment", "credits", "depleted", "billing")):
+                        friendly = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in Google AI Studio (https://aistudio.google.com/)."
                     elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
                         friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
                     elif "getaddrinfo failed" in err_msg or "11001" in err_msg:
@@ -1201,8 +1215,8 @@ class Chatbot311:
         for i in range(1, 21):
             delim_val = ""
             if i <= count:
-                start = kwargs.get(f"starting_delimiter_{i}", f"<prompt_{i}>")
-                end = kwargs.get(f"ending_delimiter_{i}", f"</prompt_{i}>")
+                val = kwargs.get(f"delimiter_{i}", f"prompt_{i}")
+                start, end = derive_delimiter_tags(val, i)
                 delim_val = extract_delimited_content(last_llm_message, start, end)
             delim_outs.append(delim_val)
 

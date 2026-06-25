@@ -1439,3 +1439,128 @@
   transform: scale(0.98);
 }
 
+/* Mermaid Diagram Styling - Premium Minimalist Dark Theme */
+.chatbot311-mermaid-container {
+  background: rgba(20, 20, 25, 0.35) !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border-radius: 12px !important;
+  padding: 16px !important;
+  margin: 10px 0 !important;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.chatbot311-mermaid-container .mermaid-preview {
+  width: 100%;
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.chatbot311-mermaid-container .mermaid-preview svg {
+  max-width: 100%;
+  height: auto !important;
+  background: transparent !important;
+}
+
+/* Force standard font and strict line-height to resolve letter clipping (y, p, g, q) */
+.chatbot311-mermaid-container svg,
+.chatbot311-mermaid-container svg * {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
+/* Fix vertical baseline alignment inside nodes */
+.chatbot311-mermaid-container svg text {
+  dominant-baseline: central !important;
+  line-height: normal !important;
+}
+
+.chatbot311-mermaid-container svg tspan,
+.chatbot311-mermaid-container .nodeLabel,
+.chatbot311-mermaid-container .label,
+.chatbot311-mermaid-container .label div,
+.chatbot311-mermaid-container .label span {
+  line-height: normal !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: #f1f5f9 !important;
+  text-align: center;
+  box-sizing: border-box !important;
+}
+
+/* Force standard height and flex vertical centering inside foreignObject HTML nodes */
+.chatbot311-mermaid-container foreignObject {
+  overflow: visible !important;
+}
+
+.chatbot311-mermaid-container foreignObject > div {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  line-height: normal !important;
+}
+
+/* Style the flowchart node boxes */
+.chatbot311-mermaid-container svg .node rect,
+.chatbot311-mermaid-container svg .node polygon,
+.chatbot311-mermaid-container svg .node circle,
+.chatbot311-mermaid-container svg .node .label-container {
+  fill: rgba(255, 255, 255, 0.02) !important;
+  stroke: rgba(255, 255, 255, 0.1) !important;
+  stroke-width: 1px !important;
+  rx: 6px !important; /* Rounded corners */
+  ry: 6px !important;
+  transition: fill 0.2s ease, stroke 0.2s ease, filter 0.2s ease;
+}
+
+/* Hover effects on nodes */
+.chatbot311-mermaid-container svg .node:hover rect,
+.chatbot311-mermaid-container svg .node:hover polygon,
+.chatbot311-mermaid-container svg .node:hover circle,
+.chatbot311-mermaid-container svg .node:hover .label-container {
+  fill: rgba(99, 102, 241, 0.06) !important;
+  stroke: rgba(99, 102, 241, 0.3) !important;
+  filter: drop-shadow(0 2px 6px rgba(99, 102, 241, 0.15));
+}
+
+/* Style the edges/connecting lines - solid slate color to prevent arrowhead crossing */
+.chatbot311-mermaid-container svg .edgePath path,
+.chatbot311-mermaid-container svg .edgePath .path,
+.chatbot311-mermaid-container svg .edgePathLink,
+.chatbot311-mermaid-container svg .edgePaths path,
+.chatbot311-mermaid-container svg .edgePaths .path {
+  stroke: #475569 !important;
+  stroke-width: 1.2px !important;
+}
+
+/* Style arrowheads - solid matching color to hide line ending behind it */
+.chatbot311-mermaid-container svg .marker path,
+.chatbot311-mermaid-container svg marker path,
+.chatbot311-mermaid-container svg [id*="arrowhead"] path {
+  fill: #475569 !important;
+  stroke: #475569 !important;
+}
+
+.chatbot311-mermaid-container .mermaid-error {
+  color: var(--cb311-glow-red);
+  font-weight: 600;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+
+
+
+

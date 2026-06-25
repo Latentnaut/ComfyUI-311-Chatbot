@@ -176,14 +176,18 @@ function parseMarkdown(text, delimiters = []) {
   let html = text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
     const id = `__CODE_BLOCK_${codeBlocks.length}__`;
     const rawCode = code.trim();
-    // Escape for HTML rendering only
-    const escapedCodeForHtml = rawCode
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-      
-    // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
-    codeBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-${lang}">${escapedCodeForHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawCode)}" title="Copy code">${copySvg}</button></div>`);
+    if (lang && lang.toLowerCase() === "mermaid") {
+      codeBlocks.push(`<div class="chatbot311-mermaid-container"><div class="mermaid-raw" style="display: none;">${rawCode}</div><div class="mermaid-preview">Rendering diagram...</div></div>`);
+    } else {
+      // Escape for HTML rendering only
+      const escapedCodeForHtml = rawCode
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+        
+      // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
+      codeBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-${lang}">${escapedCodeForHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawCode)}" title="Copy code">${copySvg}</button></div>`);
+    }
     return id;
   });
   
@@ -371,6 +375,28 @@ function parseMarkdown(text, delimiters = []) {
   return html;
 }
 
+let mermaidInitialized = false;
+let mermaidModule = null;
+
+async function initMermaid() {
+  if (mermaidInitialized) return mermaidModule;
+  try {
+    const module = await import("https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs");
+    mermaidModule = module.default || module;
+    mermaidModule.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      securityLevel: 'loose',
+      flowchart: { useMaxWidth: true, htmlLabels: true }
+    });
+    mermaidInitialized = true;
+    return mermaidModule;
+  } catch (e) {
+    console.error("Failed to initialize Mermaid:", e);
+    return null;
+  }
+}
+
 // Check for connected images in LiteGraph
 async function getConnectedImages(node) {
   const imageInputIdx = node.inputs ? node.inputs.findIndex(input => input.name === "image") : -1;
@@ -460,6 +486,17 @@ async function getConnectedImages(node) {
     return results;
   }
   return [];
+}
+
+function deriveDelimiterTags(val, index) {
+  if (!val || !val.trim()) {
+    return { start: `<prompt_${index}>`, end: `</prompt_${index}>` };
+  }
+  const tag = val.trim().replace(/^<+/, "").replace(/>+$/, "").replace(/^\/+/, "");
+  if (!tag) {
+    return { start: `<prompt_${index}>`, end: `</prompt_${index}>` };
+  }
+  return { start: `<${tag}>`, end: `</${tag}>` };
 }
 
 class ChatbotUI {
@@ -810,11 +847,11 @@ class ChatbotUI {
             let startD = "<prompt_1>";
             let endD = "</prompt_1>";
             if (count >= 1) {
-              const startW = this.node.widgets?.find(w => w && w.name === "starting_delimiter_1");
-              const endW = this.node.widgets?.find(w => w && w.name === "ending_delimiter_1");
-              if (startW && endW) {
-                startD = startW.value;
-                endD = endW.value;
+              const delimW = this.node.widgets?.find(w => w && w.name === "delimiter_1");
+              if (delimW) {
+                const { start, end } = deriveDelimiterTags(delimW.value, 1);
+                startD = start;
+                endD = end;
               }
             }
             const wrappedText = `${startD}\n${text}\n${endD}`;
@@ -1371,14 +1408,157 @@ class ChatbotUI {
     const linkId = this.node.inputs[inputIdx].link;
     if (!linkId) return null;
     
-    const link = app.graph.links[linkId];
+    let link = app.graph.links[linkId];
     if (!link) return null;
     
-    const originNode = app.graph.getNodeById(link.origin_id);
+    let originNode = app.graph.getNodeById(link.origin_id);
     if (!originNode) return null;
     
+    let originSlot = link.origin_slot;
+    
+    console.log(`[Chatbot311] getConnectedInputValue: inputName = '${inputName}', originNode type = '${originNode.type}', id = #${originNode.id}`); // gga-allow
+    
+    // Resolve routing/switch nodes (like AnySwitch311) and wireless variables (like GetNode) recursively to find the actual active source node
+    while (originNode) {
+      const typeLower = originNode.type ? originNode.type.toLowerCase() : "";
+      
+      const isSwitch = typeLower.includes("switch") || 
+                       typeLower.includes("router") || 
+                       typeLower.includes("selector");
+                       
+      const isGetNode = typeLower === "getnode" || typeLower === "get_node" || originNode.findSetter;
+                       
+      if (isSwitch) {
+        // Find the index widget robustly
+        const getIndexWidget = (node) => {
+          if (!node.widgets) return null;
+          let w = node.widgets.find(x => x && x.name && x.name.toLowerCase() === "index");
+          if (w) return w;
+          w = node.widgets.find(x => x && x.name && (x.name.toLowerCase().includes("select") || x.name.toLowerCase().includes("active") || x.name.toLowerCase().includes("switch")));
+          if (w) return w;
+          w = node.widgets.find(x => x && (x.type === "number" || x.type === "slider" || x.type === "integer" || x.type === "combo"));
+          if (w) return w;
+          return node.widgets[0];
+        };
+        
+        const indexWidget = getIndexWidget(originNode);
+        
+        // Parse active index (could be integer or combo option string)
+        let activeIdx = 0;
+        if (indexWidget) {
+          const val = indexWidget.value;
+          if (typeof val === "number") {
+            activeIdx = val;
+          } else if (typeof val === "string") {
+            const numMatch = val.match(/\d+/);
+            if (numMatch) {
+              activeIdx = parseInt(numMatch[0], 10);
+            } else {
+              if (indexWidget.options && Array.isArray(indexWidget.options.values)) {
+                const optIdx = indexWidget.options.values.indexOf(val);
+                if (optIdx !== -1) activeIdx = optIdx;
+              }
+            }
+          }
+        }
+        
+        console.log(`[Chatbot311] Resolving switch node #${originNode.id} (${originNode.type}). Active index: ${activeIdx}`); // gga-allow
+        
+        // Filter inputs to get data inputs (exclude index/select control inputs)
+        const dataInputs = (originNode.inputs || []).filter(inp => inp && inp.name !== "index" && inp.name !== "select");
+        const activeInput = dataInputs[activeIdx];
+        
+        if (!activeInput) {
+          console.warn(`[Chatbot311] Active input at index ${activeIdx} not found on switch #${originNode.id}`);
+          break;
+        }
+        
+        const nextLinkId = activeInput.link;
+        if (!nextLinkId) {
+          console.warn(`[Chatbot311] Active input slot '${activeInput.name}' on switch #${originNode.id} is disconnected`);
+          break;
+        }
+        
+        const nextLink = app.graph.links[nextLinkId];
+        if (!nextLink) break;
+        
+        originNode = app.graph.getNodeById(nextLink.origin_id);
+        link = nextLink;
+        originSlot = nextLink.origin_slot;
+        console.log(`[Chatbot311] Switch #${link.target_id} resolved to source node #${originNode.id} (${originNode.type})`); // gga-allow
+      } else if (isGetNode) {
+        // Find matching SetNode
+        const nameWidget = originNode.widgets?.[0];
+        const varName = nameWidget ? nameWidget.value : "";
+        if (!varName) {
+          console.warn(`[Chatbot311] GetNode #${originNode.id} has no variable name selected`);
+          break;
+        }
+        
+        console.log(`[Chatbot311] Resolving GetNode #${originNode.id} reading variable: '${varName}'`); // gga-allow
+        
+        const setterNode = app.graph._nodes?.find(otherNode => 
+          otherNode && 
+          (otherNode.type === 'SetNode' || (otherNode.type && otherNode.type.toLowerCase() === 'setnode')) && 
+          otherNode.widgets?.[0]?.value === varName
+        );
+        
+        if (!setterNode) {
+          console.warn(`[Chatbot311] No matching SetNode found for variable '${varName}'`);
+          break;
+        }
+        
+        const nextLinkId = setterNode.inputs?.[0]?.link;
+        if (!nextLinkId) {
+          console.warn(`[Chatbot311] SetNode #${setterNode.id} for variable '${varName}' is disconnected`);
+          break;
+        }
+        
+        const nextLink = app.graph.links[nextLinkId];
+        if (!nextLink) break;
+        
+        originNode = app.graph.getNodeById(nextLink.origin_id);
+        link = nextLink;
+        originSlot = nextLink.origin_slot;
+        console.log(`[Chatbot311] GetNode resolved wirelessly via SetNode #${setterNode.id} to source node #${originNode.id} (${originNode.type})`); // gga-allow
+      } else {
+        break;
+      }
+    }
+    
+    if (!originNode) return null;
+    
+    // Special handling for File Reader 311 / Legacy File Reader nodes to extract text content instead of file path
+    const isFileReader = originNode.type === "FileReader311" || 
+                         originNode.type === "FileReaderNode" || 
+                         (originNode.type && originNode.type.toLowerCase().includes("filereader"));
+                         
+    if (isFileReader) {
+      const getW = (name) => {
+        const w = originNode.widgets?.find(w => w && w.name === name);
+        if (w && w.value !== undefined && w.value !== null) return w.value;
+        const idx = originNode.widgets?.findIndex(w => w && w.name === name);
+        if (idx >= 0 && originNode.widgets_values?.[idx] !== undefined && originNode.widgets_values[idx] !== null) {
+          return originNode.widgets_values[idx];
+        }
+        return "";
+      };
+      
+      const edContent = (originNode.properties?.fr_editor || getW("_editor_content") || "").trim();
+      if (edContent) {
+        console.log(`[Chatbot311] Found editor content for input '${inputName}' from File Reader #${originNode.id} (len: ${edContent.length})`); // gga-allow
+        return edContent;
+      }
+      
+      const cachedContent = (originNode.properties?.fr_cache_content || getW("_cached_content") || "").trim();
+      if (cachedContent) {
+        console.log(`[Chatbot311] Found cached content for input '${inputName}' from File Reader #${originNode.id} (len: ${cachedContent.length})`); // gga-allow
+        return cachedContent;
+      }
+      console.warn(`[Chatbot311] File Reader #${originNode.id} connected to '${inputName}' has no content`);
+    }
+    
     // Case 1: Check node outputs from the last execution (highly dynamic values)
-    const originSlot = link.origin_slot;
     const nodeOutputs = app.node_outputs?.[originNode.id];
     let val = undefined;
     
@@ -1484,10 +1664,23 @@ class ChatbotUI {
     let sysGeneral = this.getConnectedInputValue("system_general");
     let sysVariable = this.getConnectedInputValue("system_variable");
     
-    if (sysGeneral === null && this.connectedSystemGeneral) {
+    console.log(`[Chatbot311] checkConnections parsed: sysGeneral len = ${sysGeneral ? sysGeneral.length : 'null'}, sysVariable len = ${sysVariable ? sysVariable.length : 'null'}`); // gga-allow
+    
+    const isValidPromptContent = (val) => {
+      if (!val || typeof val !== "string") return false;
+      const trimmed = val.trim();
+      if (!trimmed) return false;
+      if (/^\d+$/.test(trimmed)) return false; // purely a number (like switch index)
+      if (trimmed.length < 250 && !trimmed.includes("\n")) {
+        if (/[a-zA-Z]:\\|\.md$|\.txt$|\.json$/i.test(trimmed)) return false; // file path or file name
+      }
+      return true;
+    };
+
+    if (!isValidPromptContent(sysGeneral) && this.connectedSystemGeneral) {
       sysGeneral = this.connectedSystemGeneral;
     }
-    if (sysVariable === null && this.connectedSystemVariable) {
+    if (!isValidPromptContent(sysVariable) && this.connectedSystemVariable) {
       sysVariable = this.connectedSystemVariable;
     }
     
@@ -1675,10 +1868,46 @@ class ChatbotUI {
       this.messagesContainer.appendChild(bubble);
     });
     
+    this.renderMermaidDiagrams();
+    
     if (this.searchBar && this.searchBar.style.display !== "none" && this.searchInput && this.searchInput.value) {
       this.performSearch(this.searchInput.value, false);
     } else {
       this.scrollBottom();
+    }
+  }
+
+  async renderMermaidDiagrams() {
+    const containers = this.messagesContainer.querySelectorAll(".chatbot311-mermaid-container");
+    if (containers.length === 0) return;
+    
+    const mermaid = await initMermaid();
+    if (!mermaid) {
+      containers.forEach(c => {
+        const preview = c.querySelector(".mermaid-preview");
+        if (preview) preview.textContent = "Failed to load Mermaid rendering engine.";
+      });
+      return;
+    }
+    
+    for (let i = 0; i < containers.length; i++) {
+      const container = containers[i];
+      const rawEl = container.querySelector(".mermaid-raw");
+      const previewEl = container.querySelector(".mermaid-preview");
+      if (rawEl && previewEl && !container.classList.contains("rendered")) {
+        const rawCode = rawEl.textContent.trim();
+        const uniqueId = `mermaid_diag_${Math.random().toString(36).substring(2, 9)}_${i}`;
+        try {
+          const { svg } = await mermaid.render(uniqueId, rawCode);
+          previewEl.innerHTML = svg;
+          container.classList.add("rendered");
+        } catch (err) {
+          console.error("Error rendering Mermaid diagram:", err);
+          previewEl.innerHTML = `<div class="mermaid-error">Error rendering diagram. Raw code:</div><pre style="margin:4px 0 0 0; font-size:10px; opacity:0.7;"><code>${rawCode}</code></pre>`;
+          const badSvg = document.getElementById(uniqueId);
+          if (badSvg) badSvg.remove();
+        }
+      }
     }
   }
   
@@ -1708,6 +1937,8 @@ class ChatbotUI {
     if (role === "assistant" && typeof text === "string" && text.includes("Error")) {
       if (text.includes("API key not valid") || text.includes("valid API key")) {
         text = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node.";
+      } else if (text.includes("prepayment") || text.includes("credits") || text.includes("billing") || text.includes("depleted")) {
+        text = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in [Google AI Studio](https://aistudio.google.com/).";
       } else if (text.includes("rate_limited") || text.includes("429") || text.toLowerCase().includes("quota")) {
         text = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
       }
@@ -1866,11 +2097,11 @@ class ChatbotUI {
       let startD = "<prompt_1>";
       let endD = "</prompt_1>";
       if (count >= 1) {
-        const startW = this.node.widgets?.find(w => w && w.name === "starting_delimiter_1");
-        const endW = this.node.widgets?.find(w => w && w.name === "ending_delimiter_1");
-        if (startW && endW) {
-          startD = startW.value;
-          endD = endW.value;
+        const delimW = this.node.widgets?.find(w => w && w.name === "delimiter_1");
+        if (delimW) {
+          const { start, end } = deriveDelimiterTags(delimW.value, 1);
+          startD = start;
+          endD = end;
         }
       }
       const wrappedText = `${startD}\n${text}\n${endD}`;
@@ -1971,22 +2202,27 @@ class ChatbotUI {
     const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
     const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
     for (let i = 1; i <= count; i++) {
-      const startW = this.node.widgets?.find(w => w && w.name === `starting_delimiter_${i}`);
-      const endW = this.node.widgets?.find(w => w && w.name === `ending_delimiter_${i}`);
-      if (startW && endW) {
+      const delimW = this.node.widgets?.find(w => w && w.name === `delimiter_${i}`);
+      if (delimW) {
+        const { start, end } = deriveDelimiterTags(delimW.value, i);
         delimitersInfo.push({
           index: i,
-          start: startW.value,
-          end: endW.value
+          start: start,
+          end: end
         });
       }
     }
 
     if (delimitersInfo.length > 0) {
+      let variationInstruction = "";
+      if (delimitersInfo.length > 1) {
+        variationInstruction = "\n- **Multiple Variations**: Since you have multiple active delimiters, you MUST generate a slightly different variation or alternative version of the prompt/output for each active delimiter. Do not repeat the same content; customize each variation slightly while remaining true to the user's intent.";
+      }
       activeSystemPrompt = (activeSystemPrompt || "").trim() + 
         "\n\n### IMPORTANT: ACTIVE OUTPUT DELIMITERS\n" +
         "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST enclose the final clean copy-pasteable output at the very end of your response using these exact delimiters (without markdown code blocks around the delimiters themselves):\n" +
         delimitersInfo.map(d => `- Delimiter ${d.index}: Wrap the final output between '${d.start}' and '${d.end}'`).join("\n") +
+        variationInstruction +
         "\n\nExample of final output format:\n" +
         `${delimitersInfo[0].start}\n(Your generated prompt/output here)\n${delimitersInfo[0].end}`;
     }
@@ -2166,9 +2402,10 @@ class ChatbotUI {
           }
         }
         
-        // Add custom friendly warnings for common API failures
         if (errMessage.includes("API key not valid") || errMessage.includes("valid API key")) {
           errMessage = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node.";
+        } else if (errMessage.includes("prepayment") || errMessage.includes("credits") || errMessage.includes("billing") || errMessage.includes("depleted")) {
+          errMessage = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in Google AI Studio.";
         } else if (errMessage.includes("rate_limited") || errMessage.includes("429")) {
           errMessage = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
         }
@@ -2222,6 +2459,8 @@ class ChatbotUI {
       
       // Save full conversation with assistant response
       await this.saveActiveConversation();
+      
+      this.renderMermaidDiagrams();
       
     } catch (e) {
       console.error(e);
@@ -2373,7 +2612,7 @@ class ChatbotUI {
     this.triggerUndoHint();
   }
   
-  updateNodeValue(skipTrigger = false) {
+  updateNodeValue(skipTrigger = true) {
     if (this.config) {
       this.config.lastUsedModel = this.lastUsedModel;
     }
@@ -2398,12 +2637,12 @@ class ChatbotUI {
     const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
     const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
     for (let i = 1; i <= count; i++) {
-      const startW = this.node.widgets?.find(w => w && w.name === `starting_delimiter_${i}`);
-      const endW = this.node.widgets?.find(w => w && w.name === `ending_delimiter_${i}`);
-      if (startW && endW) {
+      const delimW = this.node.widgets?.find(w => w && w.name === `delimiter_${i}`);
+      if (delimW) {
+        const { start, end } = deriveDelimiterTags(delimW.value, i);
         delimiters.push({
-          start: startW.value,
-          end: endW.value
+          start: start,
+          end: end
         });
       }
     }
@@ -2936,44 +3175,24 @@ app.registerExtension({
           // 2. Delimiter widgets visibility
           const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
           for (let i = 1; i <= 20; i++) {
-            const startW = node.widgets?.find(w => w.name === `starting_delimiter_${i}`);
-            const endW = node.widgets?.find(w => w.name === `ending_delimiter_${i}`);
+            const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
             
-            if (startW) {
-              if (startW.type === "converted-widget") {
-                startW.type = startW.original_type || "STRING";
+            if (delimW) {
+              if (delimW.type === "converted-widget") {
+                delimW.type = delimW.original_type || "STRING";
               }
               if (i <= count) {
-                if (startW.element) {
-                  startW.element.style.display = "";
+                if (delimW.element) {
+                  delimW.element.style.display = "";
                 }
-                delete startW.computeSize;
-                delete startW.draw;
+                delete delimW.computeSize;
+                delete delimW.draw;
               } else {
-                if (startW.element) {
-                  startW.element.style.display = "none";
+                if (delimW.element) {
+                  delimW.element.style.display = "none";
                 }
-                startW.computeSize = () => [0, -4];
-                startW.draw = function() {};
-              }
-            }
-            
-            if (endW) {
-              if (endW.type === "converted-widget") {
-                endW.type = endW.original_type || "STRING";
-              }
-              if (i <= count) {
-                if (endW.element) {
-                  endW.element.style.display = "";
-                }
-                delete endW.computeSize;
-                delete endW.draw;
-              } else {
-                if (endW.element) {
-                  endW.element.style.display = "none";
-                }
-                endW.computeSize = () => [0, -4];
-                endW.draw = function() {};
+                delimW.computeSize = () => [0, -4];
+                delimW.draw = function() {};
               }
             }
           }
@@ -3070,13 +3289,19 @@ app.registerExtension({
               const numDelimW = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
               const count = numDelimW ? (parseInt(numDelimW.value) || 1) : 1;
               for (let i = 1; i <= 20; i++) {
-                const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
-                const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
-                if (startW && (byName[`starting_delimiter_${i}`] === undefined || !byName[`starting_delimiter_${i}`])) {
-                  startW.value = `<prompt_${i}>`;
-                }
-                if (endW && (byName[`ending_delimiter_${i}`] === undefined || !byName[`ending_delimiter_${i}`])) {
-                  endW.value = `</prompt_${i}>`;
+                const delimW = (node.widgets || []).find(w => w && w.name === `delimiter_${i}`);
+                if (delimW) {
+                  if (byName[`delimiter_${i}`] !== undefined) {
+                    delimW.value = byName[`delimiter_${i}`];
+                  } else {
+                    const oldStartVal = byName[`starting_delimiter_${i}`];
+                    if (oldStartVal !== undefined && oldStartVal !== null) {
+                      const tag = String(oldStartVal).trim().replace(/^<+/, "").replace(/>+$/, "").replace(/^\/+/, "");
+                      delimW.value = tag || `prompt_${i}`;
+                    } else {
+                      delimW.value = `prompt_${i}`;
+                    }
+                  }
                 }
               }
             } 
@@ -3255,36 +3480,39 @@ app.registerExtension({
               }
               
               if (firstDelimIndex !== -1) {
-                let delimValIdx = firstDelimIndex;
-                for (let i = 1; i <= 20; i++) {
-                  const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
-                  const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
-                  
-                  if (startW) {
-                    const savedVal = vals[delimValIdx];
-                    if (savedVal !== undefined) {
-                      if (typeof savedVal === "string" && !invalidDelimVals.includes(savedVal) && !savedVal.startsWith("{") && !savedVal.startsWith("[")) {
-                        startW.value = savedVal;
-                      } else {
-                        startW.value = `<prompt_${i}>`;
-                      }
-                      delimValIdx++;
-                    } else {
-                      startW.value = `<prompt_${i}>`;
+                const delimiterVals = [];
+                for (let i = firstDelimIndex; i < vals.length; i++) {
+                  const v = vals[i];
+                  if (typeof v === "string") {
+                    const trimmed = v.trim();
+                    if (!trimmed.startsWith("{") && !trimmed.startsWith("[") && !invalidDelimVals.includes(trimmed)) {
+                      delimiterVals.push(trimmed);
                     }
                   }
-                  
-                  if (endW) {
-                    const savedVal = vals[delimValIdx];
-                    if (savedVal !== undefined) {
-                      if (typeof savedVal === "string" && !invalidDelimVals.includes(savedVal) && !savedVal.startsWith("{") && !savedVal.startsWith("[")) {
-                        endW.value = savedVal;
-                      } else {
-                        endW.value = `</prompt_${i}>`;
-                      }
-                      delimValIdx++;
+                }
+
+                const cleanTagName = (val) => val ? val.trim().replace(/^<+/, "").replace(/>+$/, "").replace(/^\/+/, "") : "";
+
+                let isOldPairs = false;
+                if (delimiterVals.length >= 2) {
+                  const val1 = delimiterVals[0];
+                  const val2 = delimiterVals[1];
+                  const tag1 = cleanTagName(val1);
+                  const tag2 = cleanTagName(val2);
+                  if (tag1 === tag2 && val1.startsWith("<") && val2.startsWith("</")) {
+                    isOldPairs = true;
+                  }
+                }
+
+                for (let i = 1; i <= 20; i++) {
+                  const delimW = (node.widgets || []).find(w => w && w.name === `delimiter_${i}`);
+                  if (delimW) {
+                    const idx = isOldPairs ? (i - 1) * 2 : (i - 1);
+                    const savedVal = delimiterVals[idx];
+                    if (savedVal !== undefined && savedVal !== null) {
+                      delimW.value = cleanTagName(savedVal) || `prompt_${i}`;
                     } else {
-                      endW.value = `</prompt_${i}>`;
+                      delimW.value = `prompt_${i}`;
                     }
                   }
                 }
