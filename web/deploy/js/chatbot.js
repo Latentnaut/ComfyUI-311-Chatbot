@@ -3158,16 +3158,31 @@ app.registerExtension({
         const updateDelimiterOutputs = (count) => {
           if (!node.outputs) return;
           const maxDelims = 20;
-          for (let i = 1; i <= maxDelims; i++) {
-            const outputName = `Delimiter_${i}`;
-            const idx = node.outputs.findIndex(o => o.name === outputName);
-            if (i <= count) {
-              if (idx === -1) {
-                node.addOutput(outputName, "STRING");
-              }
-            } else {
-              if (idx !== -1) {
-                node.removeOutput(idx);
+          
+          const currentOutputsCount = node.outputs.length;
+          const targetOutputsCount = 5 + count;
+          
+          if (currentOutputsCount < targetOutputsCount) {
+            const startAddIdx = Math.max(1, currentOutputsCount - 5 + 1);
+            for (let i = startAddIdx; i <= count; i++) {
+              const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
+              const label = delimW && delimW.value ? String(delimW.value).trim() : `Delimiter_${i}`;
+              node.addOutput(label || `Delimiter_${i}`, "STRING");
+            }
+          } else if (currentOutputsCount > targetOutputsCount) {
+            for (let i = currentOutputsCount - 1; i >= targetOutputsCount; i--) {
+              node.removeOutput(i);
+            }
+          }
+          
+          // Rename output slots based on active delimiter widget values
+          for (let i = 1; i <= count; i++) {
+            const slotIdx = 4 + i;
+            if (node.outputs[slotIdx]) {
+              const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
+              const label = delimW && delimW.value ? String(delimW.value).trim() : `Delimiter_${i}`;
+              if (node.outputs[slotIdx].name !== label) {
+                node.outputs[slotIdx].name = label || `Delimiter_${i}`;
               }
             }
           }
@@ -3256,6 +3271,18 @@ app.registerExtension({
               updateNodeLayout();
               return res;
             };
+          }
+          
+          for (let i = 1; i <= 20; i++) {
+            const delimW = node.widgets?.find(w => w && w.name === `delimiter_${i}`);
+            if (delimW) {
+              const originalCallback = delimW.callback;
+              delimW.callback = function() {
+                const res = originalCallback ? originalCallback.apply(this, arguments) : undefined;
+                updateNodeLayout();
+                return res;
+              };
+            }
           }
           
           const apiKeyWidget = node.widgets?.find(w => w && w.name === "api_key");
