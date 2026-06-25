@@ -130,6 +130,12 @@ async function getFirebaseIndexedDBToken() {
     });
 }
 
+function sanitizeHeaderValue(val) {
+  if (!val) return "";
+  // Strip out any characters outside the ISO-8859-1 range (char codes 0-255)
+  return String(val).replace(/[^\x00-\xff]/g, "");
+}
+
 
 const editPenSvg = `
   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1053,7 +1059,7 @@ class ChatbotUI {
       }
       const headers = {};
       if (apiKey) {
-        headers["X-Gemini-API-Key"] = apiKey;
+        headers["X-Gemini-API-Key"] = sanitizeHeaderValue(apiKey);
       }
       
       const useCreditsWidget = this.node.widgets?.find(w => w && w.name === "use_comfyui_credits");
@@ -1098,7 +1104,7 @@ class ChatbotUI {
       }
       authToken = (authToken || "").trim();
       if (authToken) {
-        headers["X-Comfy-Org-Auth-Token"] = authToken;
+        headers["X-Comfy-Org-Auth-Token"] = sanitizeHeaderValue(authToken);
       }
       
       const response = await fetch("/chatbot-311/proxy/gemini", { headers });
@@ -2036,7 +2042,7 @@ class ChatbotUI {
       }
       const headers = { "Content-Type": "application/json" };
       if (apiKey) {
-        headers["X-Gemini-API-Key"] = apiKey;
+        headers["X-Gemini-API-Key"] = sanitizeHeaderValue(apiKey);
       }
       
       const useCreditsWidget = this.node.widgets?.find(w => w && w.name === "use_comfyui_credits");
@@ -2081,7 +2087,7 @@ class ChatbotUI {
       }
       authToken = (authToken || "").trim();
       if (authToken) {
-        headers["X-Comfy-Org-Auth-Token"] = authToken;
+        headers["X-Comfy-Org-Auth-Token"] = sanitizeHeaderValue(authToken);
       }
       
       const response = await fetch("/chatbot-311/proxy/gemini/v1/chat/completions", {
