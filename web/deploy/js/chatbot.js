@@ -1274,10 +1274,25 @@ class ChatbotUI {
   
   async deleteConversation(id, event) {
     event.stopPropagation();
-    const confirmed = await this.showConfirmDialog("Are you sure you want to delete this conversation?");
-    if (!confirmed) return;
     
     try {
+      // Fetch details of conversation to allow Undo before deleting
+      if (id === this.currentChatId) {
+        this.saveUndoState();
+      } else {
+        const fetchResp = await fetch(`/chatbot-311/conversations/${id}`);
+        if (fetchResp.ok) {
+          const data = await fetchResp.json();
+          if (!this.undoStack) this.undoStack = [];
+          this.undoStack.push(JSON.stringify({
+            type: "deleted_sidebar_chat",
+            conversation: data
+          }));
+          if (this.undoStack.length > 10) this.undoStack.shift();
+          this.updateUndoButtonVisibility();
+        }
+      }
+
       const response = await fetch(`/chatbot-311/conversations/${id}`, {
         method: "DELETE"
       });
@@ -1287,6 +1302,7 @@ class ChatbotUI {
         } else {
           this.fetchConversations();
         }
+        this.triggerUndoHint();
       }
     } catch (e) {
       console.error("Failed deleting conversation:", e);
@@ -2188,34 +2204,72 @@ class ChatbotUI {
     if (!this.undoStack) this.undoStack = [];
     this.undoStack.push(JSON.stringify({
       history: this.history,
-      draft: this.textarea ? this.textarea.value : ""
+      draft: this.textarea ? this.textarea.value : "",
+      chatName: this.chatName,
+      currentChatId: this.currentChatId
     }));
     if (this.undoStack.length > 10) this.undoStack.shift();
     this.updateUndoButtonVisibility();
   }
 
-  undoLastAction() {
+  async undoLastAction() {
     if (!this.undoStack || this.undoStack.length === 0) return;
     const previousState = this.undoStack.pop();
     try {
       const state = JSON.parse(previousState);
-      if (state && typeof state === "object" && "history" in state) {
+      if (state && typeof state === "object" && state.type === "deleted_sidebar_chat") {
+        // Restore deleted sidebar conversation
+        const conv = state.conversation;
+        const response = await fetch("/chatbot-311/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: conv.id,
+            name: conv.name,
+            history: conv.history,
+            model: conv.model || conv.config?.lastUsedModel || "gemini-3.5-flash"
+          })
+        });
+        if (response.ok) {
+          // If it was the active one when deleted, switch back to it
+          if (conv.id === this.currentChatId || this.history.length === 0) {
+            this.currentChatId = conv.id;
+            this.chatName = conv.name;
+            this.history = conv.history;
+            if (conv.model) {
+              this.updateModelBadge(conv.model);
+            }
+            this.renderMessages();
+            this.updateNodeValue();
+          }
+          this.fetchConversations();
+        }
+      } else if (state && typeof state === "object" && "history" in state) {
         this.history = state.history;
         if (this.textarea) {
           this.textarea.value = state.draft || "";
           this.textarea.style.height = "auto";
           this.textarea.style.height = (this.textarea.scrollHeight) + "px";
         }
+        if (state.chatName !== undefined) {
+          this.chatName = state.chatName;
+        }
+        if (state.currentChatId !== undefined) {
+          this.currentChatId = state.currentChatId;
+        }
+        this.renderMessages();
+        this.updateNodeValue();
+        await this.saveActiveConversation();
       } else {
         // Fallback for legacy stringified history states
         this.history = state;
+        this.renderMessages();
+        this.updateNodeValue();
+        await this.saveActiveConversation();
       }
     } catch (e) {
       console.error("Failed to parse undo state:", e);
     }
-    this.renderMessages();
-    this.updateNodeValue();
-    this.saveActiveConversation();
     this.updateUndoButtonVisibility();
   }
 
@@ -2268,8 +2322,6 @@ class ChatbotUI {
   
   async clearChat() {
     if (this.history.length === 0) return;
-    const confirmed = await this.showConfirmDialog("Are you sure you want to clear this conversation?");
-    if (!confirmed) return;
     
     this.saveUndoState();
     this.history = [];
@@ -2279,6 +2331,7 @@ class ChatbotUI {
     // Delete file from disk if it was saved
     fetch(`/chatbot-311/conversations/${this.currentChatId}`, { method: "DELETE" })
       .then(() => this.fetchConversations());
+    this.triggerUndoHint();
   }
   
   updateNodeValue(skipTrigger = false) {

@@ -245,9 +245,33 @@
   background-color: rgba(99, 102, 241, 0.08);
 }
 
+@keyframes undo-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
+    color: var(--cb311-text-muted);
+  }
+  30% {
+    transform: scale(1.18) rotate(-15deg);
+    box-shadow: 0 0 0 6px rgba(99, 102, 241, 0);
+    color: #a5b4fc;
+    background-color: rgba(99, 102, 241, 0.15);
+  }
+  60% {
+    transform: scale(1) rotate(5deg);
+    color: #a5b4fc;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+    color: var(--cb311-text-muted);
+  }
+}
+
 .chatbot311-btn-undo.highlight-pulse {
-  color: var(--cb311-primary-color) !important;
-  background-color: rgba(99, 102, 241, 0.08);
+  animation: undo-pulse 1.0s cubic-bezier(0.25, 1, 0.5, 1);
+  color: #a5b4fc !important;
+  background-color: rgba(99, 102, 241, 0.1) !important;
 }
 
 /* Sidebar Conversation Manager */
