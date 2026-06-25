@@ -2135,7 +2135,7 @@ class ChatbotUI {
         
         // Add custom friendly warnings for common API failures
         if (errMessage.includes("API key not valid") || errMessage.includes("valid API key")) {
-          errMessage = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node or in the `.env` file inside the `ComfyUI-311-Chatbot` directory.";
+          errMessage = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node.";
         } else if (errMessage.includes("rate_limited") || errMessage.includes("429")) {
           errMessage = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
         }
