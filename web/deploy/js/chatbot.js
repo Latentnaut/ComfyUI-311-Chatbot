@@ -3155,6 +3155,13 @@ app.registerExtension({
           }
         };
         
+        const originalOnWidgetChanged = node.onWidgetChanged;
+        node.onWidgetChanged = function(name, value, oldValue) {
+          const res = originalOnWidgetChanged ? originalOnWidgetChanged.apply(this, arguments) : undefined;
+          updateNodeLayout();
+          return res;
+        };
+        
         const updateDelimiterOutputs = (count) => {
           if (!node.outputs) return;
           const maxDelims = 20;
@@ -3184,6 +3191,8 @@ app.registerExtension({
               if (node.outputs[slotIdx].name !== label) {
                 node.outputs[slotIdx].name = label || `Delimiter_${i}`;
               }
+              // Force update display label in ComfyUI canvas node
+              node.outputs[slotIdx].label = label || `Delimiter_${i}`;
             }
           }
         };
