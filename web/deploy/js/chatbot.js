@@ -518,6 +518,7 @@ class ChatbotUI {
     this.connectedApiKey = "";
     this.connectedSystemGeneral = "";
     this.connectedSystemVariable = "";
+    this.connectedProjectContext = "";
     
     this.buildUI();
     this.setupEventListeners();
@@ -788,11 +789,12 @@ class ChatbotUI {
     });
 
     api.addEventListener("chatbot311-chat-paused", (event) => {
-      const { node_id, sound_alert, api_key, system_general, system_variable } = event.detail;
+      const { node_id, sound_alert, api_key, system_general, system_variable, project_context } = event.detail;
       if (String(node_id) === String(this.node.id)) {
         if (api_key) this.connectedApiKey = api_key;
         if (system_general) this.connectedSystemGeneral = system_general;
         if (system_variable) this.connectedSystemVariable = system_variable;
+        if (project_context) this.connectedProjectContext = project_context;
 
         if (this.confirmBanner) {
           this.confirmBanner.style.display = "flex";
@@ -1399,6 +1401,7 @@ class ChatbotUI {
     this.connectedApiKey = "";
     this.connectedSystemGeneral = "";
     this.connectedSystemVariable = "";
+    this.connectedProjectContext = "";
   }
   
   getConnectedInputValue(inputName) {
@@ -1663,8 +1666,9 @@ class ChatbotUI {
     // Check connected system prompts
     let sysGeneral = this.getConnectedInputValue("system_general");
     let sysVariable = this.getConnectedInputValue("system_variable");
+    let projContext = this.getConnectedInputValue("project_context");
     
-    console.log(`[Chatbot311] checkConnections parsed: sysGeneral len = ${sysGeneral ? sysGeneral.length : 'null'}, sysVariable len = ${sysVariable ? sysVariable.length : 'null'}`); // gga-allow
+    console.log(`[Chatbot311] checkConnections parsed: sysGeneral len = ${sysGeneral ? sysGeneral.length : 'null'}, sysVariable len = ${sysVariable ? sysVariable.length : 'null'}, projContext len = ${projContext ? projContext.length : 'null'}`); // gga-allow
     
     const isValidPromptContent = (val) => {
       if (!val || typeof val !== "string") return false;
@@ -1683,16 +1687,21 @@ class ChatbotUI {
     if (!isValidPromptContent(sysVariable) && this.connectedSystemVariable) {
       sysVariable = this.connectedSystemVariable;
     }
+    if (!isValidPromptContent(projContext) && this.connectedProjectContext) {
+      projContext = this.connectedProjectContext;
+    }
     
     const badgeSystem = this.container.querySelector("#badge-system");
+    const hasAnyContent = (sysGeneral && sysGeneral.trim()) || (sysVariable && sysVariable.trim()) || (projContext && projContext.trim());
     
-    if (sysGeneral !== null || sysVariable !== null) {
+    if (hasAnyContent) {
       const parts = [];
-      if (sysGeneral !== null) parts.push(`General: "${sysGeneral.slice(0, 50)}..."`);
-      if (sysVariable !== null) parts.push(`Variable: "${sysVariable.slice(0, 50)}..."`);
-      const tooltip = "Connected system prompt(s):\n" + parts.join("\n");
+      if (sysGeneral && sysGeneral.trim()) parts.push(`General: "${sysGeneral.trim().slice(0, 50)}..."`);
+      if (sysVariable && sysVariable.trim()) parts.push(`Variable: "${sysVariable.trim().slice(0, 50)}..."`);
+      if (projContext && projContext.trim()) parts.push(`Context: "${projContext.trim().slice(0, 50)}..."`);
+      const tooltip = "Connected system prompt/context(s):\n" + parts.join("\n");
       
-      const newSystemKey = (sysGeneral || "") + "|||" + (sysVariable || "");
+      const newSystemKey = (sysGeneral || "") + "|||" + (sysVariable || "") + "|||" + (projContext || "");
       if (this.connectedSystemPrompt !== newSystemKey) {
         this.connectedSystemPrompt = newSystemKey;
         badgeSystem.style.display = "inline-block";
@@ -2182,6 +2191,7 @@ class ChatbotUI {
       const parts = this.connectedSystemPrompt.split("|||");
       const sysGeneralVal = parts[0] ? parts[0].trim() : "";
       const sysVariableVal = parts[1] ? parts[1].trim() : "";
+      const projContextVal = parts[2] ? parts[2].trim() : "";
       
       const systemParts = [];
       if (sysGeneralVal) {
@@ -2191,6 +2201,15 @@ class ChatbotUI {
       }
       if (sysVariableVal) {
         systemParts.push(sysVariableVal);
+      }
+      if (projContextVal) {
+        systemParts.push(
+          "### ACTIVE PROJECT CONTEXT (USER DATA)\n" +
+          "The following project context, pre-production notes, show bible, character descriptions, or previous planning work has been supplied by the user. You MUST read this data carefully, respect all names/facts/parameters declared within it, and adapt your cinematic planning around it:\n" +
+          "```\n" +
+          projContextVal +
+          "\n```"
+        );
       }
       if (systemParts.length > 0) {
         activeSystemPrompt = systemParts.join("\n\n");

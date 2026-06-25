@@ -640,6 +640,7 @@ class Chatbot311:
                 "prompt": ("STRING", {"forceInput": True, "multiline": True}),
                 "system_general": ("STRING", {"forceInput": True, "multiline": True}),
                 "system_variable": ("STRING", {"forceInput": True, "multiline": True}),
+                "project_context": ("STRING", {"forceInput": True, "multiline": True}),
             },
             "hidden": {
                 "node_id": "UNIQUE_ID",
@@ -725,6 +726,7 @@ class Chatbot311:
         prompt_str = unpack_str(kwargs.get("prompt", ""))
         system_general_str = unpack_str(kwargs.get("system_general", ""))
         system_variable_str = unpack_str(kwargs.get("system_variable", ""))
+        project_context_str = unpack_str(kwargs.get("project_context", ""))
         
         # 1. Determine the base/general system prompt
         gen_prompt = system_general_str
@@ -744,6 +746,14 @@ class Chatbot311:
             system_parts.append(gen_prompt.strip())
         if system_variable_str and system_variable_str.strip():
             system_parts.append(system_variable_str.strip())
+        if project_context_str and project_context_str.strip():
+            system_parts.append(
+                "### ACTIVE PROJECT CONTEXT (USER DATA)\n"
+                "The following project context, pre-production notes, show bible, character descriptions, or previous planning work has been supplied by the user. You MUST read this data carefully, respect all names/facts/parameters declared within it, and adapt your cinematic planning around it:\n"
+                "```\n"
+                + project_context_str.strip()
+                + "\n```"
+            )
             
         # Append active output delimiters instructions
         num_delimiters = kwargs.get("number_of_delimiters", 1)
@@ -785,6 +795,7 @@ class Chatbot311:
             "last_seed": None, 
             "last_system_general": None,
             "last_system_variable": None,
+            "last_project_context": None,
             "initialized": False
         })
         cache_initialized = node_cache.get("initialized", False)
@@ -793,11 +804,13 @@ class Chatbot311:
         last_seed = node_cache.get("last_seed")
         last_sys_gen = node_cache.get("last_system_general")
         last_sys_var = node_cache.get("last_system_variable")
+        last_proj_ctx = node_cache.get("last_project_context")
 
         # Determine if inputs have changed
         prompt_changed = (last_prompt != prompt_str)
         sys_gen_changed = (last_sys_gen != system_general_str)
         sys_var_changed = (last_sys_var != system_variable_str)
+        proj_ctx_changed = (last_proj_ctx != project_context_str)
 
         image_changed = True
         if last_image is not None and image is not None:
@@ -825,9 +838,10 @@ class Chatbot311:
             node_cache["last_seed"] = seed
             node_cache["last_system_general"] = system_general_str
             node_cache["last_system_variable"] = system_variable_str
+            node_cache["last_project_context"] = project_context_str
             node_cache["initialized"] = True
             is_really_new = False
-        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed) or seed_changed or sys_gen_changed or sys_var_changed:
+        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed) or seed_changed or sys_gen_changed or sys_var_changed or proj_ctx_changed:
             is_really_new = True
 
         # Determine if we received execution inputs (prompt or image) from the workflow graph or a UI draft
@@ -1042,6 +1056,7 @@ class Chatbot311:
                 "last_seed": None, 
                 "last_system_general": None,
                 "last_system_variable": None,
+                "last_project_context": None,
                 "initialized": False
             })
             node_cache["last_image"] = image
@@ -1049,6 +1064,7 @@ class Chatbot311:
             node_cache["last_seed"] = seed
             node_cache["last_system_general"] = system_general_str
             node_cache["last_system_variable"] = system_variable_str
+            node_cache["last_project_context"] = project_context_str
             node_cache["initialized"] = True
 
         # Handle Pause/Interactive mode if requested
@@ -1062,7 +1078,8 @@ class Chatbot311:
                 "api_key": api_key,
                 "auth_token_comfy_org": auth_token_comfy_org,
                 "system_general": system_general_str,
-                "system_variable": system_variable_str
+                "system_variable": system_variable_str,
+                "project_context": project_context_str
             }
             
             # Send notification to UI that we are paused and waiting for confirmation
@@ -1072,7 +1089,8 @@ class Chatbot311:
                     "sound_alert": sound_alert,
                     "api_key": api_key,
                     "system_general": system_general_str,
-                    "system_variable": system_variable_str
+                    "system_variable": system_variable_str,
+                    "project_context": project_context_str
                 })
             except Exception as e:
                 LOG.error("Failed to emit pause websocket: %s", e)
