@@ -2378,10 +2378,18 @@ class ChatbotUI {
         headers["X-Comfy-Org-Auth-Token"] = sanitizeHeaderValue(authToken);
       }
       
+      const modelWidget = this.node.widgets?.find(w => w && w.name === "model_name");
+      const activeModel = modelWidget ? modelWidget.value : this.lastUsedModel;
+      if (activeModel) {
+        this.lastUsedModel = activeModel;
+        this.updateModelBadge(activeModel);
+      }
+      
       const response = await fetch("/chatbot-311/proxy/gemini/v1/chat/completions", {
         method: "POST",
         headers: headers,
         body: JSON.stringify({
+          model: activeModel,
           messages: apiMessages,
           stream: true
         })
