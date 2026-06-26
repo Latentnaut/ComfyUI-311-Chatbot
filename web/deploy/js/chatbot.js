@@ -190,15 +190,24 @@ function parseMarkdown(text, delimiters = []) {
     }
     return id;
   });
+
+  // 1b. Extract inline code blocks from raw text before escaping HTML
+  const inlineCodeBlocks = [];
+  html = html.replace(/`([^`]+)`/g, (match, code) => {
+    const id = `__INLINE_CODE_${inlineCodeBlocks.length}__`;
+    const escapedCode = code
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    inlineCodeBlocks.push(`<code>${escapedCode}</code>`);
+    return id;
+  });
   
   // 2. Escape HTML entities on the rest of the text
   html = html
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-    
-  // 3. Inline code
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   
   // 4. Wrap custom delimiters in code blocks
   const customDelimBlocks = [];
@@ -211,7 +220,7 @@ function parseMarkdown(text, delimiters = []) {
       const escapedStartHtmlRegex = escapedStartHtml.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       const escapedEndHtmlRegex = escapedEndHtml.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
-      const regex = new RegExp(escapedStartHtmlRegex + '([\\s\\S]*?)' + escapedEndHtmlRegex, 'gm');
+      const regex = new RegExp(escapedStartHtmlRegex + '((?:(?!' + escapedStartHtmlRegex + ')[\\s\\S])*?)' + escapedEndHtmlRegex, 'gm');
       html = html.replace(regex, (match, content) => {
         const id = `__CUSTOM_DELIM_${customDelimBlocks.length}__`;
         const rawContent = unescapeHtml(content.trim());
@@ -366,6 +375,10 @@ function parseMarkdown(text, delimiters = []) {
   // 7. Restore placeholders
   codeBlocks.forEach((block, idx) => {
     html = html.replace(`__CODE_BLOCK_${idx}__`, block);
+  });
+
+  inlineCodeBlocks.forEach((block, idx) => {
+    html = html.replace(`__INLINE_CODE_${idx}__`, block);
   });
   
   customDelimBlocks.forEach((block, idx) => {
@@ -642,7 +655,7 @@ class ChatbotUI {
     }
     
     this.textarea.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         this.sendMessage();
       }
@@ -3159,6 +3172,9 @@ app.registerExtension({
         node.onWidgetChanged = function(name, value, oldValue) {
           const res = originalOnWidgetChanged ? originalOnWidgetChanged.apply(this, arguments) : undefined;
           updateNodeLayout();
+          if (node.chatbotUI) {
+            node.chatbotUI.renderMessages();
+          }
           return res;
         };
         
