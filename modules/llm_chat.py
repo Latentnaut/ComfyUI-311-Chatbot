@@ -980,8 +980,10 @@ class Chatbot311:
                                 "please ensure you execute the **FULL workflow** (Queue Prompt) rather than running only this group/node, "
                                 "so that all credentials and inputs are properly propagated."
                             )
+                        elif "503" in err_msg or "unavailable" in err_msg.lower():
+                            friendly = "⚠️ **Gemini Service Unavailable (503):** The Gemini API is currently overloaded or undergoing maintenance. Please wait a moment and try again."
                         else:
-                            friendly = f"Execution Error: {err_msg}"
+                            friendly = f"⚠️ **Execution Error:** {err_msg}"
                         history.append({"role": "assistant", "content": friendly})
                     
                     # Send websocket update back to frontend chat panel so it syncs instantly without reload
@@ -1176,8 +1178,10 @@ class Chatbot311:
                             "please ensure you execute the **FULL workflow** (Queue Prompt) rather than running only this group/node, "
                             "so that all credentials and inputs are properly propagated."
                         )
+                    elif "503" in err_msg or "unavailable" in err_msg.lower():
+                        friendly = "⚠️ **Gemini Service Unavailable (503):** The Gemini API is currently overloaded or undergoing maintenance. Please wait a moment and try again."
                     else:
-                        friendly = f"Execution Error: {err_msg}"
+                        friendly = f"⚠️ **Execution Error:** {err_msg}"
                     history.append({"role": "assistant", "content": friendly})
                     if node_id:
                         try:

@@ -1956,13 +1956,17 @@ class ChatbotUI {
     }
     
     // Format assistant execution/API errors into user-friendly warnings
-    if (role === "assistant" && typeof text === "string" && text.includes("Error")) {
+    if (role === "assistant" && typeof text === "string" && text.includes("Error") && !text.startsWith("⚠️")) {
       if (text.includes("API key not valid") || text.includes("valid API key")) {
         text = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node.";
       } else if (text.includes("prepayment") || text.includes("credits") || text.includes("billing") || text.includes("depleted")) {
         text = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in [Google AI Studio](https://aistudio.google.com/).";
       } else if (text.includes("rate_limited") || text.includes("429") || text.toLowerCase().includes("quota")) {
         text = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
+      } else if (text.includes("503") || text.toLowerCase().includes("unavailable")) {
+        text = "⚠️ **Gemini Service Unavailable (503):** The Gemini API is currently overloaded or undergoing maintenance. Please wait a moment and try again.";
+      } else {
+        text = `⚠️ **Execution Error:** ${text.replace(/^Execution Error:\s*/i, "")}`;
       }
     }
     
