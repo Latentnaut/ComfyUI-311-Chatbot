@@ -38,6 +38,91 @@ def _on_prompt_intercept_token(json_data):
 
 PromptServer.instance.add_on_prompt_handler(_on_prompt_intercept_token)
 
+def _normalize_message_content(content) -> str:
+    """Normalize OpenAI-style message content (string or list of parts) to text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for part in content:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict):
+                if part.get("text"):
+                    texts.append(str(part.get("text")))
+                elif part.get("type") == "text" and part.get("text") is not None:
+                    texts.append(str(part.get("text")))
+        return "\n".join(t for t in texts if t)
+    return str(content)
+
+
+def _extract_chat_completion_text(result: dict) -> str:
+    """
+    Extract assistant text from Gemini OpenAI-compatible (or native) JSON responses.
+    Avoids KeyError when message.content is omitted (thinking/safety/empty replies).
+    """
+    if not isinstance(result, dict):
+        raise Exception(f"Unexpected Gemini response type: {type(result).__name__}")
+
+    if "error" in result:
+        err = result["error"]
+        if isinstance(err, dict):
+            raise Exception(f"Gemini API error: {err.get('message', err)}")
+        raise Exception(f"Gemini API error: {err}")
+
+    choices = result.get("choices")
+    if isinstance(choices, list) and choices:
+        choice0 = choices[0] if isinstance(choices[0], dict) else {}
+        message = choice0.get("message") or choice0.get("delta") or {}
+        if not isinstance(message, dict):
+            message = {}
+
+        content = message.get("content")
+        text = _normalize_message_content(content)
+        if text:
+            return text
+
+        # Some Gemini OpenAI-compat replies put text under parts instead of content
+        parts = message.get("parts")
+        if isinstance(parts, list):
+            part_texts = []
+            for part in parts:
+                if isinstance(part, dict) and part.get("text"):
+                    part_texts.append(str(part["text"]))
+                elif isinstance(part, str):
+                    part_texts.append(part)
+            if part_texts:
+                return "\n".join(part_texts)
+
+        finish = choice0.get("finish_reason")
+        preview = json.dumps(result, ensure_ascii=False)[:800]
+        raise Exception(
+            f"Gemini returned no message content (finish_reason={finish}). Response preview: {preview}"
+        )
+
+    # Native generateContent fallback
+    candidates = result.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        texts = []
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            content = cand.get("content") or {}
+            parts = content.get("parts") if isinstance(content, dict) else None
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if isinstance(part, dict) and part.get("text"):
+                    texts.append(str(part["text"]))
+        if texts:
+            return "\n".join(texts)
+
+    preview = json.dumps(result, ensure_ascii=False)[:800]
+    raise Exception(f"Unexpected Gemini response format. Preview: {preview}")
+
+
 
 # Register HTTP POST route to resume chat
 @PromptServer.instance.routes.post("/chatbot-311/chat/resume")
@@ -425,7 +510,7 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
         with urllib.request.urlopen(req, timeout=timeout) as response:
             resp_data = response.read().decode("utf-8")
             result = json.loads(resp_data)
-            return result["choices"][0]["message"]["content"]
+            return _extract_chat_completion_text(result)
     except urllib.error.HTTPError as e:
         err_text = e.read().decode("utf-8")
         LOG.error("Gemini API HTTP Error %s: %s", e.code, err_text)
@@ -847,6 +932,9 @@ class Chatbot311:
         # Determine if we received execution inputs (prompt or image) from the workflow graph or a UI draft
         draft = ui_widget.get("draft", "").strip()
         has_draft = bool(draft)
+        is_oneshot_mode = actual_mode in ("LLM One-Shot (Immediate)", "Manual One-Shot (Immediate)")
+        # One-Shot UX: leave the prompt in the text box and reuse it on later Runs
+        clear_draft_flag = has_draft and not is_oneshot_mode
         
         has_new_input = False
         user_parts = []
@@ -855,6 +943,7 @@ class Chatbot311:
             user_parts.append({"type": "text", "text": draft})
             has_new_input = True
             is_really_new = True
+            node_cache["last_oneshot_draft"] = draft
             
             if image is not None:
                 if len(image.shape) == 4:
@@ -876,6 +965,8 @@ class Chatbot311:
             if prompt_str and prompt_str.strip():
                 user_parts.append({"type": "text", "text": prompt_str.strip()})
                 has_new_input = True
+                if is_oneshot_mode:
+                    node_cache["last_oneshot_draft"] = prompt_str.strip()
                 
             if image is not None:
                 if len(image.shape) == 4:
@@ -895,6 +986,12 @@ class Chatbot311:
                             "image_url": {"url": base64_image}
                         })
                         has_new_input = True
+
+        # Empty draft box must stay empty: never resurrect cached/history prompt text.
+        # Reuse UX = leave the text in the textarea (frontend keeps it for One-Shot).
+        if is_oneshot_mode and not has_draft and not (prompt_str and prompt_str.strip()):
+            node_cache.pop("last_oneshot_draft", None)
+
         # Check if we should skip auto-execution in interactive/manual pause modes when there is no graph prompt or UI draft
         should_query_llm = True
         if actual_mode in ("LLM Chat (Pause & Confirm)", "Manual (Pause & Confirm)") and not prompt_str.strip() and not has_draft:
@@ -919,7 +1016,7 @@ class Chatbot311:
                     PromptServer.instance.send_sync("chatbot311-update-history", {
                         "node_id": node_id,
                         "history": history,
-                        "clear_draft": has_draft
+                        "clear_draft": clear_draft_flag
                     })
                 except Exception as e:
                     LOG.error("Failed to emit intermediate user message update: %s", e)
@@ -992,7 +1089,7 @@ class Chatbot311:
                             PromptServer.instance.send_sync("chatbot311-update-history", {
                                 "node_id": node_id,
                                 "history": history,
-                                "clear_draft": has_draft,
+                                "clear_draft": clear_draft_flag,
                                 "model": info.get("model", model)
                             })
                         except Exception as e:
@@ -1025,6 +1122,9 @@ class Chatbot311:
                             user_text += part.get("text", "")
                         elif isinstance(part, str):
                             user_text += part
+
+                    if user_text.strip() and is_oneshot_mode:
+                        node_cache["last_oneshot_draft"] = user_text.strip()
                     
                     wrapped_text = f"{start_d}\n{user_text.strip()}\n{end_d}"
                     history.append({"role": "assistant", "content": wrapped_text})
@@ -1035,7 +1135,7 @@ class Chatbot311:
                             PromptServer.instance.send_sync("chatbot311-update-history", {
                                 "node_id": node_id,
                                 "history": history,
-                                "clear_draft": has_draft
+                                "clear_draft": clear_draft_flag
                             })
                         except Exception as e:
                             LOG.error("Failed to emit websocket update: %s", e)
@@ -1250,7 +1350,9 @@ class Chatbot311:
         ui_widget["config"]["lastUsedModel"] = actual_model
 
         ui_widget["history"] = history
-        if "draft" in ui_widget:
+        # One-Shot: trust the live UI draft as-is (do not reinject cached text into an empty box).
+        # Non-One-Shot: clear draft after execution.
+        if not is_oneshot_mode and "draft" in ui_widget:
             ui_widget["draft"] = ""
         return (ui_widget, last_message, last_user_message, last_llm_message, all_messages) + tuple(delim_outs)
 # endregion

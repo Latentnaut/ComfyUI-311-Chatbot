@@ -89,9 +89,14 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
         if "model" not in forward_body:
             forward_body["model"] = os.environ.get("GEMINI_MODEL") or cfg.get("default_model", "gemini-3.5-flash")
 
-    # Map OpenAI-compatible endpoints (like v1/chat/completions) to Gemini's beta openai endpoint
+    # Map OpenAI-compatible endpoints (like v1/chat/completions) to Gemini's beta openai endpoint.
+    # Official base is .../v1beta/openai/ + chat/completions (NOT .../openai/v1/chat/completions).
+    # See: https://ai.google.dev/gemini-api/docs/openai
     if proxypath and proxypath.lstrip("/").startswith("v1/"):
-        upstream = base_url.rstrip("/") + "/v1beta/openai/" + proxypath.lstrip("/")
+        openai_path = proxypath.lstrip("/")
+        if openai_path.startswith("v1/"):
+            openai_path = openai_path[3:]
+        upstream = base_url.rstrip("/") + "/v1beta/openai/" + openai_path
         if api_token:
             headers["Authorization"] = f"Bearer {api_token}"
         # Strip fields not supported by Gemini's OpenAI-compatible endpoint

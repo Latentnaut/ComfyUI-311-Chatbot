@@ -666,6 +666,9 @@ class ChatbotUI {
         this.textarea.style.height = "auto";
         this.textarea.style.height = (this.textarea.scrollHeight) + "px";
       }
+      // Keep ui_widget.draft in sync on every keystroke so Queue never
+      // serializes a stale cached draft when the textarea looks empty.
+      this.updateNodeValue(true);
     });
 
     this.textarea.addEventListener("blur", () => {
@@ -872,12 +875,16 @@ class ChatbotUI {
             const wrappedText = `${startD}\n${text}\n${endD}`;
             this.history.push({ role: "assistant", content: wrappedText });
             this.renderMessages();
-            this.textarea.value = "";
-            this.textarea.style.height = "auto";
-            this.isTextareaResized = false;
+            // One-Shot keeps the draft so the next Queue Prompt reuses the same prompt
+            if (currentMode === "Manual (Pause & Confirm)") {
+              this.textarea.value = "";
+              this.textarea.style.height = "auto";
+              this.isTextareaResized = false;
+            }
             this.pendingAttachments = [];
             this.fileInput.value = "";
             this.updatePreviewBar();
+            this.updateNodeValue();
             this.saveActiveConversation();
           } else if (!this.isGenerating) {
             const allAttachments = [...(this.pendingAttachments || []), ...(this.connectedAttachments || [])];
@@ -894,13 +901,17 @@ class ChatbotUI {
             }
             this.history.push({ role: "user", content });
             this.renderMessages();
-            
-            this.textarea.value = "";
-            this.textarea.style.height = "auto";
-            this.isTextareaResized = false;
+
+            // One-Shot keeps the draft so the next Queue Prompt reuses the same prompt
+            if (currentMode !== "LLM One-Shot (Immediate)") {
+              this.textarea.value = "";
+              this.textarea.style.height = "auto";
+              this.isTextareaResized = false;
+            }
             this.pendingAttachments = [];
             this.fileInput.value = "";
             this.updatePreviewBar();
+            this.updateNodeValue();
             
             this.showTypingIndicator(true);
             this.isGenerating = true;
@@ -2656,19 +2667,27 @@ class ChatbotUI {
     this.triggerUndoHint();
   }
   
-  updateNodeValue(skipTrigger = true) {
+  buildWidgetPayload() {
     if (this.config) {
       this.config.lastUsedModel = this.lastUsedModel;
     }
-    const val = JSON.stringify({
+    // Live textarea is the only source of truth for draft.
+    return {
       config: this.config,
       history: this.history,
       currentChatId: this.currentChatId,
       chatName: this.chatName,
+      node_id: this.node?.id,
       draft: this.textarea ? this.textarea.value : ""
-    });
+    };
+  }
+
+  updateNodeValue(skipTrigger = true) {
+    const val = this.buildWidgetPayload();
     const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets[0];
     if (widget) {
+      // Store as object (same shape as getValue) so paths that read
+      // widget.value instead of getValue() cannot reuse a stale draft.
       widget.value = val;
     }
     if (!skipTrigger) {
@@ -3011,6 +3030,27 @@ class ChatbotUI {
 
 app.registerExtension({
   name: "Chatbot311.Extension",
+
+  async setup() {
+    // Belt-and-suspenders: flush live draft into widget.value before any Queue.
+    if (app._chatbot311QueuePatched) return;
+    app._chatbot311QueuePatched = true;
+    const originalQueuePrompt = app.queuePrompt;
+    if (typeof originalQueuePrompt !== "function") return;
+    app.queuePrompt = async function (...args) {
+      try {
+        const nodes = app.graph?._nodes || [];
+        for (const n of nodes) {
+          if (n?.chatbotUI?.updateNodeValue) {
+            n.chatbotUI.updateNodeValue(true);
+          }
+        }
+      } catch (e) {
+        console.warn("[Chatbot311] Failed to sync draft before queue:", e);
+      }
+      return originalQueuePrompt.apply(this, args);
+    };
+  },
   
   getCustomWidgets() {
     return {
@@ -3024,23 +3064,17 @@ app.registerExtension({
         // reading getMinHeight/getMaxHeight from widget options.
         // No manual computeSize overrides needed.
         
-        const widget = node.addDOMWidget(inputName, "CHAT_311", element, {
+        let widget;
+        widget = node.addDOMWidget(inputName, "CHAT_311", element, {
           hideOnZoom: false,
           getMinHeight() {
             return 250;
           },
           getValue() {
-            if (chatbot.config) {
-              chatbot.config.lastUsedModel = chatbot.lastUsedModel;
-            }
-            return {
-              config: chatbot.config,
-              history: chatbot.history,
-              currentChatId: chatbot.currentChatId,
-              chatName: chatbot.chatName,
-              node_id: node.id,
-              draft: chatbot.textarea ? chatbot.textarea.value : ""
-            };
+            // Always rebuild from the live textarea and mirror into widget.value.
+            const val = chatbot.buildWidgetPayload();
+            if (widget) widget.value = val;
+            return val;
           },
           setValue(val) {
             chatbot.setValue(val);
@@ -3057,6 +3091,13 @@ app.registerExtension({
             };
           }
         });
+
+        // Prefer serializeValue when ComfyUI uses it (skips stale widget.value).
+        widget.serializeValue = async () => {
+          const val = chatbot.buildWidgetPayload();
+          widget.value = val;
+          return val;
+        };
         
         // No widget.computeSize or widget.draw overrides.
         // ComfyUI V2 uses computeLayoutSize with getMinHeight from widget options.
