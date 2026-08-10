@@ -1024,33 +1024,43 @@ class Chatbot311:
             # Query Gemini synchronously
             if actual_mode in ("LLM Chat (Pause & Confirm)", "LLM One-Shot (Immediate)"):
                 if should_query_llm:
-                    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-                    
-                    # Prepend system prompt to temp list for API call
-                    api_messages = []
-                    if system and system.strip():
-                        api_messages.append({"role": "system", "content": system.strip()})
-                    
-                    for msg in history:
-                        api_messages.append({
-                            "role": msg.get("role"),
-                            "content": msg.get("content")
-                        })
-                    ensure_latest_user_message_has_image(api_messages)
-                    
-                    LOG.info(f"Querying Gemini ({model}) with system instruction...")
-                    if node_id:
-                        try:
-                            PromptServer.instance.send_sync("chatbot311-show-typing", {
-                                "node_id": node_id,
-                                "show": True
-                            })
-                        except Exception:
-                            pass
-                    info = {}
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
-                        history.append({"role": "assistant", "content": assistant_response})
+                        model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+                        
+                        # Prepend system prompt to temp list for API call
+                        api_messages = []
+                        if system and system.strip():
+                            api_messages.append({"role": "system", "content": system.strip()})
+                        
+                        for msg in history:
+                            api_messages.append({
+                                "role": msg.get("role"),
+                                "content": msg.get("content")
+                            })
+                        ensure_latest_user_message_has_image(api_messages)
+                        
+                        LOG.info(f"Querying Gemini ({model}) with system instruction...")
+                        if node_id:
+                            try:
+                                PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                    "node_id": node_id,
+                                    "show": True
+                                })
+                            except Exception:
+                                pass
+                        info = {}
+                        try:
+                            assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
+                            history.append({"role": "assistant", "content": assistant_response})
+                        finally:
+                            if node_id:
+                                try:
+                                    PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                        "node_id": node_id,
+                                        "show": False
+                                    })
+                                except Exception:
+                                    pass
                     except Exception as e:
                         err_msg = str(e)
                         if "API key not valid" in err_msg or "valid API key" in err_msg:
@@ -1073,8 +1083,7 @@ class Chatbot311:
                             friendly = f"⚠️ **Execution Error:** {err_msg}"
                         history.append({"role": "assistant", "content": friendly})
                     
-                    # Send history first, then stop typing — hiding earlier leaves a dead gap
-                    # while the (often image-heavy) websocket payload is still in flight.
+                    # Send websocket update back to frontend chat panel so it syncs instantly without reload
                     if node_id:
                         try:
                             PromptServer.instance.send_sync("chatbot311-update-history", {
@@ -1085,13 +1094,6 @@ class Chatbot311:
                             })
                         except Exception as e:
                             LOG.error("Failed to emit websocket update: %s", e)
-                        try:
-                            PromptServer.instance.send_sync("chatbot311-show-typing", {
-                                "node_id": node_id,
-                                "show": False
-                            })
-                        except Exception:
-                            pass
                 else:
                     # Just update the history with the images so the frontend shows them
                     if node_id:
@@ -1223,33 +1225,43 @@ class Chatbot311:
         # Handle One-Shot Prompt query if widget text was entered but no new graph input triggered
         elif actual_mode == "LLM One-Shot (Immediate)" and not has_new_input:
             if history and history[-1].get("role") == "user":
-                model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-                
-                # Prepend system prompt to temp list for API call
-                api_messages = []
-                if system and system.strip():
-                    api_messages.append({"role": "system", "content": system.strip()})
-                
-                for msg in history:
-                    api_messages.append({
-                        "role": msg.get("role"),
-                        "content": msg.get("content")
-                    })
-                ensure_latest_user_message_has_image(api_messages)
-                
-                LOG.info(f"Querying Gemini ({model}) with system instruction in LLM One-Shot (Immediate) mode (from widget)...")
-                if node_id:
-                    try:
-                        PromptServer.instance.send_sync("chatbot311-show-typing", {
-                            "node_id": node_id,
-                            "show": True
-                        })
-                    except Exception:
-                        pass
-                info = {}
                 try:
-                    assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
-                    history.append({"role": "assistant", "content": assistant_response})
+                    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+                    
+                    # Prepend system prompt to temp list for API call
+                    api_messages = []
+                    if system and system.strip():
+                        api_messages.append({"role": "system", "content": system.strip()})
+                    
+                    for msg in history:
+                        api_messages.append({
+                            "role": msg.get("role"),
+                            "content": msg.get("content")
+                        })
+                    ensure_latest_user_message_has_image(api_messages)
+                    
+                    LOG.info(f"Querying Gemini ({model}) with system instruction in LLM One-Shot (Immediate) mode (from widget)...")
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                "node_id": node_id,
+                                "show": True
+                            })
+                        except Exception:
+                            pass
+                    info = {}
+                    try:
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
+                        history.append({"role": "assistant", "content": assistant_response})
+                    finally:
+                        if node_id:
+                            try:
+                                PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                    "node_id": node_id,
+                                    "show": False
+                                })
+                            except Exception:
+                                pass
                 except Exception as e:
                     err_msg = str(e)
                     if "API key not valid" in err_msg or "valid API key" in err_msg:
@@ -1271,22 +1283,15 @@ class Chatbot311:
                     else:
                         friendly = f"⚠️ **Execution Error:** {err_msg}"
                     history.append({"role": "assistant", "content": friendly})
-                if node_id:
-                    try:
-                        PromptServer.instance.send_sync("chatbot311-update-history", {
-                            "node_id": node_id,
-                            "history": history,
-                            "model": info.get("model", model)
-                        })
-                    except Exception:
-                        pass
-                    try:
-                        PromptServer.instance.send_sync("chatbot311-show-typing", {
-                            "node_id": node_id,
-                            "show": False
-                        })
-                    except Exception:
-                        pass
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "model": info.get("model", model)
+                            })
+                        except Exception:
+                            pass
 
         # Parse outputs for node output slots
         all_messages = []

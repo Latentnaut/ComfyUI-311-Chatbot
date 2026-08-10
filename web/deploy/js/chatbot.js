@@ -800,20 +800,7 @@ class ChatbotUI {
         }
         this.updateNodeValue();
         this.saveActiveConversation();
-
-        // Keep thinking dots through intermediate user/image updates and through
-        // the websocket lag after the LLM returns (history payload can be large).
-        const last = Array.isArray(this.history) && this.history.length
-          ? this.history[this.history.length - 1]
-          : null;
-        if (last && last.role === "user") {
-          this.isGenerating = true;
-          this.showTypingIndicator(true);
-        } else {
-          this.showTypingIndicator(false);
-          this.isGenerating = false;
-          this.setSendButtonState(false);
-        }
+        this.isGenerating = false;
       }
     });
 
@@ -850,20 +837,7 @@ class ChatbotUI {
     api.addEventListener("chatbot311-show-typing", (event) => {
       const { node_id, show } = event.detail;
       if (String(node_id) === String(this.node.id)) {
-        // Ignore premature hide while the last history item is still a user turn —
-        // the assistant reply may still be in flight over the websocket.
-        if (!show) {
-          const last = Array.isArray(this.history) && this.history.length
-            ? this.history[this.history.length - 1]
-            : null;
-          if (last && last.role === "user") {
-            this.isGenerating = true;
-            this.showTypingIndicator(true);
-            return;
-          }
-        }
         this.showTypingIndicator(show);
-        if (show) this.isGenerating = true;
       }
     });
 
@@ -874,8 +848,7 @@ class ChatbotUI {
         if (this.confirmBanner) {
           this.confirmBanner.style.display = "none";
         }
-        // Do not clear typing/isGenerating on execution end (nodeId === null):
-        // the assistant history update can arrive a few seconds later.
+        this.isGenerating = false;
         this.clearConnectedCredentials();
       } else {
         // Node started executing!
@@ -1444,7 +1417,6 @@ class ChatbotUI {
     this.updateUndoButtonVisibility();
     this.renderMessages();
     this.updateNodeValue();
-    this.ensureWidgetLayout();
     this.container.classList.remove("sidebar-open");
     this.fetchConversations();
   }
@@ -1912,25 +1884,15 @@ class ChatbotUI {
     this.fetchConversations();
   }
   
-  ensureWidgetLayout() {
-    if (!this.node?.syncWidgetSize) return;
-    this.node.syncWidgetSize();
-    // Second pass after WebKit finishes intrinsic reflow (empty-history clear on Mac)
-    requestAnimationFrame(() => {
-      if (this.node?.syncWidgetSize) this.node.syncWidgetSize();
-    });
-  }
-
   renderMessages() {
     this.messagesContainer.innerHTML = "";
     
     if (this.history.length === 0) {
       this.messagesContainer.innerHTML = `
-        <div class="chatbot311-empty-state">
+        <div style="text-align: center; color: var(--cb311-text-muted); font-size: 11px; margin-top: 24px; padding: 0 20px;">
           Ask Gemini to craft prompts. Connect inputs, upload images, or start typing below.
         </div>
       `;
-      this.ensureWidgetLayout();
       return;
     }
     
@@ -2657,8 +2619,6 @@ class ChatbotUI {
         this.undoBtn.classList.remove("highlight-pulse");
       }, 1000);
     }
-    // Undo button becoming visible can trigger a WebKit reflow that collapses width
-    this.ensureWidgetLayout();
   }
 
   reuseMessage(idx) {
@@ -2695,76 +2655,42 @@ class ChatbotUI {
   
   async clearChat() {
     if (this.history.length === 0) return;
-
-    const deletedId = this.currentChatId;
+    
     this.saveUndoState();
-    // New chat id after delete — avoids stale conversation file / widget id
-    // and keeps Queue Prompt serialization stable after trash.
-    this.currentChatId = "chat_" + Math.random().toString(36).substring(2, 15);
     this.history = [];
     this.chatName = "";
-    this.isGenerating = false;
-    this.showTypingIndicator(false);
-    this.setSendButtonState(false);
-    if (this.confirmBanner) {
-      this.confirmBanner.style.display = "none";
-    }
     this.renderMessages();
     this.updateNodeValue();
-    this.ensureWidgetLayout();
-    if (deletedId) {
-      fetch(`/chatbot-311/conversations/${deletedId}`, { method: "DELETE" })
-        .then(() => this.fetchConversations())
-        .catch((e) => console.error("Failed deleting conversation after clear:", e));
-    } else {
-      this.fetchConversations();
-    }
+    // Delete file from disk if it was saved
+    fetch(`/chatbot-311/conversations/${this.currentChatId}`, { method: "DELETE" })
+      .then(() => this.fetchConversations());
     this.triggerUndoHint();
   }
   
   buildWidgetPayload() {
-    try {
-      if (this.config && typeof this.config === "object") {
-        this.config.lastUsedModel = this.lastUsedModel;
-      }
-      // Live textarea is the only source of truth for draft.
-      // Clone plain data so graphToPrompt / structuredClone never sees live refs.
-      const history = Array.isArray(this.history)
-        ? JSON.parse(JSON.stringify(this.history))
-        : [];
-      const config = this.config && typeof this.config === "object"
-        ? JSON.parse(JSON.stringify(this.config))
-        : {};
-      return {
-        config,
-        history,
-        currentChatId: this.currentChatId || "",
-        chatName: this.chatName || "",
-        node_id: this.node?.id,
-        draft: this.textarea ? String(this.textarea.value || "") : ""
-      };
-    } catch (e) {
-      console.warn("[Chatbot311] buildWidgetPayload fallback:", e);
-      return {
-        config: {},
-        history: [],
-        currentChatId: this.currentChatId || "",
-        chatName: "",
-        node_id: this.node?.id,
-        draft: ""
-      };
+    if (this.config) {
+      this.config.lastUsedModel = this.lastUsedModel;
     }
+    // Live textarea is the only source of truth for draft.
+    return {
+      config: this.config,
+      history: this.history,
+      currentChatId: this.currentChatId,
+      chatName: this.chatName,
+      node_id: this.node?.id,
+      draft: this.textarea ? this.textarea.value : ""
+    };
   }
 
   updateNodeValue(skipTrigger = true) {
     const val = this.buildWidgetPayload();
-    const widget = (this.node.widgets || []).find(w => w && w.name === "ui_widget");
+    const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets[0];
     if (widget) {
       // Store as object (same shape as getValue) so paths that read
       // widget.value instead of getValue() cannot reuse a stale draft.
       widget.value = val;
     }
-    if (!skipTrigger && this.node?.trigger) {
+    if (!skipTrigger) {
       this.node.trigger("change");
     }
   }
@@ -3133,144 +3059,22 @@ app.registerExtension({
         element.className = "chatbot311-container";
         
         const chatbot = new ChatbotUI(node, element);
-
-        // CDS §3.4 Resizable (MIL / Image-Selector):
-        // pin node.computeSize; widget height = node.size − chrome.
-        // NEVER report fill height via getMinHeight/computeLayoutSize (runaway growth).
-        // NEVER write parent.style.top (chat floats on drag).
-        const MIN_NODE_W = 320;
-        const MIN_NODE_H = 420;
-        const MIN_CHAT_H = 250;
-        const NODE_HEADER_H = 30;
-        const NODE_SLOT_H = 22;
-        const NODE_PADDING_V = 12;
-
-        node.computeSize = function () {
-          return [MIN_NODE_W, MIN_NODE_H];
-        };
-        if (!node.size || node.size[0] < MIN_NODE_W || node.size[1] < MIN_NODE_H) {
-          if (node.setSize) node.setSize([380, 580]);
-          else node.size = [380, 580];
-        }
-
+        
+        // ComfyUI V2 handles widget sizing via computeLayoutSize,
+        // reading getMinHeight/getMaxHeight from widget options.
+        // No manual computeSize overrides needed.
+        
         let widget;
-        let sizeObserver = null;
-        let syncingStyles = false;
-
-        const safeSetWidgetDim = (w, key, value) => {
-          try {
-            const desc = Object.getOwnPropertyDescriptor(w, key)
-              || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(w) || {}, key);
-            if (desc && desc.set) {
-              w[key] = value;
-              return;
-            }
-            if (!desc || desc.writable) {
-              w[key] = value;
-            }
-          } catch (_) {
-            /* ignore read-only */
-          }
-        };
-
-        const measureChromeHeight = () => {
-          const trueWidth = node.size?.[0] || 380;
-          let widgetH = 0;
-          for (const w of node.widgets || []) {
-            if (!w || w === widget || w.name === inputName || w.name === "ui_widget") continue;
-            if (typeof w.computeSize === "function") {
-              try {
-                const sz = w.computeSize(trueWidth);
-                const row = Array.isArray(sz) ? sz[1] : 20;
-                // Hidden rows use [0, -4] → net 0 after +4
-                widgetH += (row || 0) + 4;
-              } catch (_) {
-                widgetH += 30;
-              }
-            } else {
-              widgetH += 30;
-            }
-          }
-          // Widget-promoted sockets must not inflate chrome (classic canvas still has them).
-          const inCount = (node.inputs || []).filter((inp) => inp && !inp.widget).length;
-          const outCount = (node.outputs || []).length;
-          const slotsH = Math.max(inCount, outCount) * NODE_SLOT_H;
-          return NODE_HEADER_H + slotsH + widgetH + NODE_PADDING_V;
-        };
-
-        const applyChatGeometry = () => {
-          // ComfyUI passes inflated width while selected — always use node.size[0].
-          const trueWidth = node.size?.[0] || 380;
-          const nodeH = node.size?.[1] || MIN_NODE_H;
-          const parent = element.parentElement;
-          const top = parent ? parseFloat(parent.style.top) : NaN;
-
-          // Visual fill from live top when available; else chrome (IS/MIL).
-          // Layout size reported separately as fixed MIN — do not feed this h into getMinHeight.
-          let h;
-          if (Number.isFinite(top) && top > 40) {
-            h = Math.max(MIN_CHAT_H, Math.floor(nodeH - top - 4));
-          } else {
-            h = Math.max(MIN_CHAT_H, Math.floor(nodeH - measureChromeHeight()));
-          }
-          const targetWidth = Math.max(200, trueWidth - 20);
-
-          element.style.width = "100%";
-          element.style.height = `${h}px`;
-          element.style.boxSizing = "border-box";
-
-          if (parent) {
-            syncingStyles = true;
-            try {
-              parent.style.setProperty("width", `${targetWidth}px`, "important");
-              parent.style.setProperty("max-width", "none", "important");
-              parent.style.setProperty("height", `${h}px`, "important");
-              parent.style.setProperty("margin", "0px", "important");
-              parent.style.setProperty("padding", "0px", "important");
-              parent.style.setProperty("box-sizing", "border-box", "important");
-              // Clear any leftover min-height from earlier experiments (drove growth).
-              parent.style.removeProperty("min-height");
-              parent.style.removeProperty("max-height");
-            } finally {
-              queueMicrotask(() => { syncingStyles = false; });
-            }
-          }
-
-          if (widget) {
-            safeSetWidgetDim(widget, "width", targetWidth);
-            safeSetWidgetDim(widget, "height", h);
-          }
-          return [trueWidth, h];
-        };
-
         widget = node.addDOMWidget(inputName, "CHAT_311", element, {
           hideOnZoom: false,
-          // Fixed floor only — never report fill height to the layout engine.
           getMinHeight() {
-            return MIN_CHAT_H;
-          },
-          computeSize() {
-            // Side-effect: size the DOM to fill. Return a fixed H so LiteGraph
-            // cannot feed node.size → fill → larger node (runaway).
-            applyChatGeometry();
-            return [node.size?.[0] || 380, MIN_CHAT_H];
+            return 250;
           },
           getValue() {
-            try {
-              const val = chatbot.buildWidgetPayload();
-              if (widget) widget.value = val;
-              return val;
-            } catch (e) {
-              console.warn("[Chatbot311] getValue failed:", e);
-              return {
-                config: {},
-                history: [],
-                currentChatId: chatbot.currentChatId || "",
-                chatName: "",
-                node_id: node?.id,
-                draft: ""
-              };
-            }
+            // Always rebuild from the live textarea and mirror into widget.value.
+            const val = chatbot.buildWidgetPayload();
+            if (widget) widget.value = val;
+            return val;
           },
           setValue(val) {
             chatbot.setValue(val);
@@ -3288,67 +3092,85 @@ app.registerExtension({
           }
         });
 
+        // Prefer serializeValue when ComfyUI uses it (skips stale widget.value).
         widget.serializeValue = async () => {
-          try {
-            const val = chatbot.buildWidgetPayload();
-            widget.value = val;
-            return val;
-          } catch (e) {
-            console.warn("[Chatbot311] serializeValue failed, using empty payload:", e);
-            const fallback = {
-              config: {},
-              history: [],
-              currentChatId: chatbot.currentChatId || "",
-              chatName: "",
-              node_id: node?.id,
-              draft: ""
-            };
-            widget.value = fallback;
-            return fallback;
-          }
+          const val = chatbot.buildWidgetPayload();
+          widget.value = val;
+          return val;
         };
-
-        // Pin layout reports to the floor. Fill is DOM-only via applyChatGeometry.
-        // Do not set maxHeight:MIN — that clamps the panel to a 250px stub.
-        widget.computeSize = function () {
-          applyChatGeometry();
-          return [node.size?.[0] || 380, MIN_CHAT_H];
-        };
-        widget.computeLayoutSize = function () {
-          applyChatGeometry();
-          return { minHeight: MIN_CHAT_H, minWidth: 0 };
-        };
-
+        
+        // No widget.computeSize or widget.draw overrides.
+        // ComfyUI V2 uses computeLayoutSize with getMinHeight from widget options.
+        // The chatbot fills remaining space via CSS height: 100%.
+        
         node.chatbotWidget = widget;
         node.chatbotUI = chatbot;
+        
+        let sizeObserver = null;
+        let lastNodeWidth = 0;
+        let lastNodeHeight = 0;
 
-        node.syncWidgetSize = () => {
-          try {
-            applyChatGeometry();
-            const parent = element.parentElement;
-            if (parent && typeof MutationObserver !== "undefined") {
-              if (!sizeObserver) {
-                sizeObserver = new MutationObserver(() => {
-                  if (!syncingStyles) applyChatGeometry();
-                });
-              }
-              sizeObserver.disconnect();
+        node.syncWidgetSize = (size) => {
+          const actualSize = size || node.size;
+          if (!actualSize) return;
+
+          if (widget.element && widget.element.parentElement) {
+            const parent = widget.element.parentElement;
+            
+            // Register MutationObserver once parent is available
+            if (!sizeObserver && typeof MutationObserver !== "undefined") {
+              sizeObserver = new MutationObserver(() => {
+                node.syncWidgetSize();
+              });
               sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
             }
-          } catch (e) {
-            console.warn("[Chatbot311] syncWidgetSize failed:", e);
+            
+            const targetWidth = actualSize[0] - 20;
+            const topOffset = parseFloat(parent.style.top) || 260;
+            const targetHeight = Math.max(250, actualSize[1] - topOffset - 16);
+            
+            // Only update DOM styles if node size or widget width differs
+            if (actualSize[0] !== lastNodeWidth || actualSize[1] !== lastNodeHeight || parent.style.width !== targetWidth + "px") {
+              lastNodeWidth = actualSize[0];
+              lastNodeHeight = actualSize[1];
+              
+              widget.width = targetWidth;
+              widget.height = targetHeight;
+              
+              parent.style.setProperty("width", targetWidth + "px", "important");
+              parent.style.setProperty("max-width", "none", "important");
+              parent.style.setProperty("margin", "0px", "important");
+              parent.style.setProperty("padding", "0px", "important");
+              parent.style.setProperty("box-sizing", "border-box", "important");
+              
+              widget.element.style.setProperty("width", "100%", "important");
+              widget.element.style.setProperty("max-width", "none", "important");
+              widget.element.style.setProperty("margin", "0px", "important");
+              widget.element.style.setProperty("box-sizing", "border-box", "important");
+              
+              parent.style.setProperty("height", targetHeight + "px", "important");
+              widget.element.style.height = "100%";
+            }
           }
         };
-
         node.syncWidgetSize();
-
+        
+        if (!node.size || node.size[0] < 200 || node.size[1] < 200) {
+          node.size = [380, 580];
+          if (node.setSize) {
+            node.setSize([380, 580]);
+          }
+        }
+        
         const onRemoved = node.onRemoved;
-        node.onRemoved = function () {
-          if (sizeObserver) sizeObserver.disconnect();
+        node.onRemoved = function() {
+          if (sizeObserver) {
+            sizeObserver.disconnect();
+          }
           if (chatbot) chatbot.destroy();
           if (onRemoved) onRemoved.apply(this, arguments);
         };
-
+        
         return widget;
       }
     };
@@ -3384,7 +3206,7 @@ app.registerExtension({
         
         node.onResize = function(size) {
           if (node.syncWidgetSize) {
-            node.syncWidgetSize(size);
+            node.syncWidgetSize();
           }
           if (node.graph) {
             node.graph.setDirtyCanvas(true, true);
@@ -3394,44 +3216,35 @@ app.registerExtension({
         const originalOnWidgetChanged = node.onWidgetChanged;
         node.onWidgetChanged = function(name, value, oldValue) {
           const res = originalOnWidgetChanged ? originalOnWidgetChanged.apply(this, arguments) : undefined;
-          // ui_widget updates (clear/send/history sync) must NOT rebuild outputs or
-          // re-render chat — that raced after trash and broke graphToPrompt
-          // ("can't access property output, res is undefined" via UE/pysssss).
-          const layoutNames = new Set(["mode", "sound_alert", "number_of_delimiters", "use_comfyui_credits"]);
-          const isDelim = typeof name === "string" && name.startsWith("delimiter_");
-          if (layoutNames.has(name) || isDelim) {
-            updateNodeLayout();
+          updateNodeLayout();
+          if (node.chatbotUI) {
+            node.chatbotUI.renderMessages();
           }
           return res;
         };
         
         const updateDelimiterOutputs = (count) => {
           if (!node.outputs) return;
-          const safeCount = Math.max(0, Math.min(20, parseInt(count, 10) || 0));
+          const maxDelims = 20;
           
           const currentOutputsCount = node.outputs.length;
-          const targetOutputsCount = 5 + safeCount;
+          const targetOutputsCount = 5 + count;
           
           if (currentOutputsCount < targetOutputsCount) {
             const startAddIdx = Math.max(1, currentOutputsCount - 5 + 1);
-            for (let i = startAddIdx; i <= safeCount; i++) {
+            for (let i = startAddIdx; i <= count; i++) {
               const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
               const label = delimW && delimW.value ? String(delimW.value).trim() : `Delimiter_${i}`;
               node.addOutput(label || `Delimiter_${i}`, "STRING");
             }
           } else if (currentOutputsCount > targetOutputsCount) {
             for (let i = currentOutputsCount - 1; i >= targetOutputsCount; i--) {
-              // Never drop a connected delimiter output — dangling links break Queue.
-              const out = node.outputs[i];
-              if (out && Array.isArray(out.links) && out.links.length > 0) {
-                break;
-              }
               node.removeOutput(i);
             }
           }
           
           // Rename output slots based on active delimiter widget values
-          for (let i = 1; i <= safeCount; i++) {
+          for (let i = 1; i <= count; i++) {
             const slotIdx = 4 + i;
             if (node.outputs[slotIdx]) {
               const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
@@ -3503,11 +3316,6 @@ app.registerExtension({
           if (node.chatbotUI) {
             node.chatbotUI.updateInputAreaVisibility();
           }
-
-          // Remeasure chat fill after hiding/showing delimiter rows.
-          if (node.syncWidgetSize) {
-            node.syncWidgetSize();
-          }
           
           if (node.graph) {
             node.graph.setDirtyCanvas(true, true);
@@ -3577,27 +3385,12 @@ app.registerExtension({
           }
         }, 100);
         
-        const originalOnSerialize = node.onSerialize;
         node.onSerialize = function(data) {
-          if (originalOnSerialize) {
-            originalOnSerialize.apply(this, arguments);
-          }
           if (node.widgets) {
             data.widgets_values_by_name = {};
             for (const w of node.widgets) {
               if (w && w.name) {
-                let val = w.value;
-                // Always serialize live chat state (not a stale widget.value).
-                if (w.name === "ui_widget" && node.chatbotUI?.buildWidgetPayload) {
-                  val = node.chatbotUI.buildWidgetPayload();
-                }
-                try {
-                  data.widgets_values_by_name[w.name] = JSON.parse(JSON.stringify(val ?? null));
-                } catch (e) {
-                  data.widgets_values_by_name[w.name] = w.name === "ui_widget"
-                    ? { config: {}, history: [], currentChatId: "", chatName: "", draft: "" }
-                    : null;
-                }
+                data.widgets_values_by_name[w.name] = w.value;
               }
             }
           }
