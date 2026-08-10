@@ -800,7 +800,20 @@ class ChatbotUI {
         }
         this.updateNodeValue();
         this.saveActiveConversation();
-        this.isGenerating = false;
+
+        // Keep thinking dots through intermediate user/image updates and through
+        // the websocket lag after the LLM returns (history payload can be large).
+        const last = Array.isArray(this.history) && this.history.length
+          ? this.history[this.history.length - 1]
+          : null;
+        if (last && last.role === "user") {
+          this.isGenerating = true;
+          this.showTypingIndicator(true);
+        } else {
+          this.showTypingIndicator(false);
+          this.isGenerating = false;
+          this.setSendButtonState(false);
+        }
       }
     });
 
@@ -837,7 +850,20 @@ class ChatbotUI {
     api.addEventListener("chatbot311-show-typing", (event) => {
       const { node_id, show } = event.detail;
       if (String(node_id) === String(this.node.id)) {
+        // Ignore premature hide while the last history item is still a user turn —
+        // the assistant reply may still be in flight over the websocket.
+        if (!show) {
+          const last = Array.isArray(this.history) && this.history.length
+            ? this.history[this.history.length - 1]
+            : null;
+          if (last && last.role === "user") {
+            this.isGenerating = true;
+            this.showTypingIndicator(true);
+            return;
+          }
+        }
         this.showTypingIndicator(show);
+        if (show) this.isGenerating = true;
       }
     });
 
@@ -848,7 +874,8 @@ class ChatbotUI {
         if (this.confirmBanner) {
           this.confirmBanner.style.display = "none";
         }
-        this.isGenerating = false;
+        // Do not clear typing/isGenerating on execution end (nodeId === null):
+        // the assistant history update can arrive a few seconds later.
         this.clearConnectedCredentials();
       } else {
         // Node started executing!
@@ -1417,6 +1444,7 @@ class ChatbotUI {
     this.updateUndoButtonVisibility();
     this.renderMessages();
     this.updateNodeValue();
+    this.ensureWidgetLayout();
     this.container.classList.remove("sidebar-open");
     this.fetchConversations();
   }
@@ -1884,15 +1912,25 @@ class ChatbotUI {
     this.fetchConversations();
   }
   
+  ensureWidgetLayout() {
+    if (!this.node?.syncWidgetSize) return;
+    this.node.syncWidgetSize();
+    // Second pass after WebKit finishes intrinsic reflow (empty-history clear on Mac)
+    requestAnimationFrame(() => {
+      if (this.node?.syncWidgetSize) this.node.syncWidgetSize();
+    });
+  }
+
   renderMessages() {
     this.messagesContainer.innerHTML = "";
     
     if (this.history.length === 0) {
       this.messagesContainer.innerHTML = `
-        <div style="text-align: center; color: var(--cb311-text-muted); font-size: 11px; margin-top: 24px; padding: 0 20px;">
+        <div class="chatbot311-empty-state">
           Ask Gemini to craft prompts. Connect inputs, upload images, or start typing below.
         </div>
       `;
+      this.ensureWidgetLayout();
       return;
     }
     
@@ -2619,6 +2657,8 @@ class ChatbotUI {
         this.undoBtn.classList.remove("highlight-pulse");
       }, 1000);
     }
+    // Undo button becoming visible can trigger a WebKit reflow that collapses width
+    this.ensureWidgetLayout();
   }
 
   reuseMessage(idx) {
@@ -2655,42 +2695,76 @@ class ChatbotUI {
   
   async clearChat() {
     if (this.history.length === 0) return;
-    
+
+    const deletedId = this.currentChatId;
     this.saveUndoState();
+    // New chat id after delete — avoids stale conversation file / widget id
+    // and keeps Queue Prompt serialization stable after trash.
+    this.currentChatId = "chat_" + Math.random().toString(36).substring(2, 15);
     this.history = [];
     this.chatName = "";
+    this.isGenerating = false;
+    this.showTypingIndicator(false);
+    this.setSendButtonState(false);
+    if (this.confirmBanner) {
+      this.confirmBanner.style.display = "none";
+    }
     this.renderMessages();
     this.updateNodeValue();
-    // Delete file from disk if it was saved
-    fetch(`/chatbot-311/conversations/${this.currentChatId}`, { method: "DELETE" })
-      .then(() => this.fetchConversations());
+    this.ensureWidgetLayout();
+    if (deletedId) {
+      fetch(`/chatbot-311/conversations/${deletedId}`, { method: "DELETE" })
+        .then(() => this.fetchConversations())
+        .catch((e) => console.error("Failed deleting conversation after clear:", e));
+    } else {
+      this.fetchConversations();
+    }
     this.triggerUndoHint();
   }
   
   buildWidgetPayload() {
-    if (this.config) {
-      this.config.lastUsedModel = this.lastUsedModel;
+    try {
+      if (this.config && typeof this.config === "object") {
+        this.config.lastUsedModel = this.lastUsedModel;
+      }
+      // Live textarea is the only source of truth for draft.
+      // Clone plain data so graphToPrompt / structuredClone never sees live refs.
+      const history = Array.isArray(this.history)
+        ? JSON.parse(JSON.stringify(this.history))
+        : [];
+      const config = this.config && typeof this.config === "object"
+        ? JSON.parse(JSON.stringify(this.config))
+        : {};
+      return {
+        config,
+        history,
+        currentChatId: this.currentChatId || "",
+        chatName: this.chatName || "",
+        node_id: this.node?.id,
+        draft: this.textarea ? String(this.textarea.value || "") : ""
+      };
+    } catch (e) {
+      console.warn("[Chatbot311] buildWidgetPayload fallback:", e);
+      return {
+        config: {},
+        history: [],
+        currentChatId: this.currentChatId || "",
+        chatName: "",
+        node_id: this.node?.id,
+        draft: ""
+      };
     }
-    // Live textarea is the only source of truth for draft.
-    return {
-      config: this.config,
-      history: this.history,
-      currentChatId: this.currentChatId,
-      chatName: this.chatName,
-      node_id: this.node?.id,
-      draft: this.textarea ? this.textarea.value : ""
-    };
   }
 
   updateNodeValue(skipTrigger = true) {
     const val = this.buildWidgetPayload();
-    const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets[0];
+    const widget = (this.node.widgets || []).find(w => w && w.name === "ui_widget");
     if (widget) {
       // Store as object (same shape as getValue) so paths that read
       // widget.value instead of getValue() cannot reuse a stale draft.
       widget.value = val;
     }
-    if (!skipTrigger) {
+    if (!skipTrigger && this.node?.trigger) {
       this.node.trigger("change");
     }
   }
@@ -3065,16 +3139,41 @@ app.registerExtension({
         // No manual computeSize overrides needed.
         
         let widget;
+        // ComfyUI BaseWidget.height is getter-only now — layout size comes from
+        // computeLayoutSize → getMinHeight/getMaxHeight. Return the remaining
+        // node height so the chat fills the node (not a 250px stub).
+        const chatFillHeight = () => {
+          const size = node.size;
+          if (!size || !size[1]) return 250;
+          const parent = widget?.element?.parentElement;
+          const topOffset = parent ? (parseFloat(parent.style.top) || 260) : 260;
+          return Math.max(250, Math.floor(size[1] - topOffset - 16));
+        };
         widget = node.addDOMWidget(inputName, "CHAT_311", element, {
           hideOnZoom: false,
           getMinHeight() {
-            return 250;
+            return chatFillHeight();
+          },
+          getMaxHeight() {
+            return chatFillHeight();
           },
           getValue() {
             // Always rebuild from the live textarea and mirror into widget.value.
-            const val = chatbot.buildWidgetPayload();
-            if (widget) widget.value = val;
-            return val;
+            try {
+              const val = chatbot.buildWidgetPayload();
+              if (widget) widget.value = val;
+              return val;
+            } catch (e) {
+              console.warn("[Chatbot311] getValue failed:", e);
+              return {
+                config: {},
+                history: [],
+                currentChatId: chatbot.currentChatId || "",
+                chatName: "",
+                node_id: node?.id,
+                draft: ""
+              };
+            }
           },
           setValue(val) {
             chatbot.setValue(val);
@@ -3093,10 +3192,26 @@ app.registerExtension({
         });
 
         // Prefer serializeValue when ComfyUI uses it (skips stale widget.value).
+        // Must never throw: cg-use-everywhere swallows graphToPrompt errors and
+        // returns undefined, then pysssss scripts crash on res.output.
         widget.serializeValue = async () => {
-          const val = chatbot.buildWidgetPayload();
-          widget.value = val;
-          return val;
+          try {
+            const val = chatbot.buildWidgetPayload();
+            widget.value = val;
+            return val;
+          } catch (e) {
+            console.warn("[Chatbot311] serializeValue failed, using empty payload:", e);
+            const fallback = {
+              config: {},
+              history: [],
+              currentChatId: chatbot.currentChatId || "",
+              chatName: "",
+              node_id: node?.id,
+              draft: ""
+            };
+            widget.value = fallback;
+            return fallback;
+          }
         };
         
         // No widget.computeSize or widget.draw overrides.
@@ -3107,50 +3222,108 @@ app.registerExtension({
         node.chatbotUI = chatbot;
         
         let sizeObserver = null;
+        let observedParent = null;
         let lastNodeWidth = 0;
         let lastNodeHeight = 0;
+        let syncingStyles = false;
+
+        const safeSetWidgetSize = (w, key, value) => {
+          // ComfyUI frontend BaseWidget exposes width/height as getter-only;
+          // assigning throws and aborts clearChat → next Queue fails with
+          // "Cannot read properties of undefined (reading 'output')".
+          try {
+            const desc = Object.getOwnPropertyDescriptor(w, key)
+              || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(w) || {}, key);
+            if (desc && desc.set) {
+              w[key] = value;
+              return;
+            }
+            if (!desc || desc.writable) {
+              w[key] = value;
+            }
+          } catch (_) {
+            /* ignore read-only widget geometry */
+          }
+        };
 
         node.syncWidgetSize = (size) => {
-          const actualSize = size || node.size;
-          if (!actualSize) return;
+          try {
+            const actualSize = size || node.size;
+            if (!actualSize) return;
 
-          if (widget.element && widget.element.parentElement) {
-            const parent = widget.element.parentElement;
-            
-            // Register MutationObserver once parent is available
-            if (!sizeObserver && typeof MutationObserver !== "undefined") {
-              sizeObserver = new MutationObserver(() => {
-                node.syncWidgetSize();
-              });
-              sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
+            if (widget.element && widget.element.parentElement) {
+              const parent = widget.element.parentElement;
+
+              // Rebind if ComfyUI replaced the DOM widget wrapper (common after content clears)
+              if (typeof MutationObserver !== "undefined") {
+                if (!sizeObserver) {
+                  sizeObserver = new MutationObserver(() => {
+                    if (!syncingStyles) node.syncWidgetSize();
+                  });
+                }
+                if (observedParent !== parent) {
+                  if (observedParent && sizeObserver) {
+                    sizeObserver.disconnect();
+                  }
+                  sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
+                  observedParent = parent;
+                }
+              }
+
+              const targetWidth = Math.max(200, actualSize[0] - 20);
+              const topOffset = parseFloat(parent.style.top) || 260;
+              const targetHeight = Math.max(250, actualSize[1] - topOffset - 16);
+              const styleWidth = parent.style.width;
+              const measuredWidth = parent.offsetWidth || 0;
+              // Safari/WebKit may report a correct style.width while the wrapper
+              // has collapsed to content width after clearing history.
+              const collapsed =
+                measuredWidth > 0 && measuredWidth < targetWidth - 2;
+              const needsSync =
+                actualSize[0] !== lastNodeWidth ||
+                actualSize[1] !== lastNodeHeight ||
+                styleWidth !== targetWidth + "px" ||
+                collapsed;
+
+              if (needsSync) {
+                lastNodeWidth = actualSize[0];
+                lastNodeHeight = actualSize[1];
+
+                safeSetWidgetSize(widget, "width", targetWidth);
+                safeSetWidgetSize(widget, "height", targetHeight);
+
+                syncingStyles = true;
+                if (sizeObserver) sizeObserver.disconnect();
+                try {
+                  parent.style.setProperty("width", targetWidth + "px", "important");
+                  parent.style.setProperty("min-width", targetWidth + "px", "important");
+                  parent.style.setProperty("max-width", "none", "important");
+                  parent.style.setProperty("margin", "0px", "important");
+                  parent.style.setProperty("padding", "0px", "important");
+                  parent.style.setProperty("box-sizing", "border-box", "important");
+
+                  widget.element.style.setProperty("width", "100%", "important");
+                  widget.element.style.setProperty("min-width", "100%", "important");
+                  widget.element.style.setProperty("max-width", "none", "important");
+                  widget.element.style.setProperty("margin", "0px", "important");
+                  widget.element.style.setProperty("box-sizing", "border-box", "important");
+
+                  parent.style.setProperty("height", targetHeight + "px", "important");
+                  parent.style.setProperty("min-height", targetHeight + "px", "important");
+                  widget.element.style.setProperty("height", "100%", "important");
+                  widget.element.style.setProperty("min-height", "100%", "important");
+                } finally {
+                  if (sizeObserver && parent.isConnected) {
+                    sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
+                    observedParent = parent;
+                  }
+                  // Defer so queued MutationRecords from our writes are ignored
+                  queueMicrotask(() => { syncingStyles = false; });
+                }
+              }
             }
-            
-            const targetWidth = actualSize[0] - 20;
-            const topOffset = parseFloat(parent.style.top) || 260;
-            const targetHeight = Math.max(250, actualSize[1] - topOffset - 16);
-            
-            // Only update DOM styles if node size or widget width differs
-            if (actualSize[0] !== lastNodeWidth || actualSize[1] !== lastNodeHeight || parent.style.width !== targetWidth + "px") {
-              lastNodeWidth = actualSize[0];
-              lastNodeHeight = actualSize[1];
-              
-              widget.width = targetWidth;
-              widget.height = targetHeight;
-              
-              parent.style.setProperty("width", targetWidth + "px", "important");
-              parent.style.setProperty("max-width", "none", "important");
-              parent.style.setProperty("margin", "0px", "important");
-              parent.style.setProperty("padding", "0px", "important");
-              parent.style.setProperty("box-sizing", "border-box", "important");
-              
-              widget.element.style.setProperty("width", "100%", "important");
-              widget.element.style.setProperty("max-width", "none", "important");
-              widget.element.style.setProperty("margin", "0px", "important");
-              widget.element.style.setProperty("box-sizing", "border-box", "important");
-              
-              parent.style.setProperty("height", targetHeight + "px", "important");
-              widget.element.style.height = "100%";
-            }
+          } catch (e) {
+            console.warn("[Chatbot311] syncWidgetSize failed:", e);
           }
         };
         node.syncWidgetSize();
@@ -3216,35 +3389,44 @@ app.registerExtension({
         const originalOnWidgetChanged = node.onWidgetChanged;
         node.onWidgetChanged = function(name, value, oldValue) {
           const res = originalOnWidgetChanged ? originalOnWidgetChanged.apply(this, arguments) : undefined;
-          updateNodeLayout();
-          if (node.chatbotUI) {
-            node.chatbotUI.renderMessages();
+          // ui_widget updates (clear/send/history sync) must NOT rebuild outputs or
+          // re-render chat — that raced after trash and broke graphToPrompt
+          // ("can't access property output, res is undefined" via UE/pysssss).
+          const layoutNames = new Set(["mode", "sound_alert", "number_of_delimiters", "use_comfyui_credits"]);
+          const isDelim = typeof name === "string" && name.startsWith("delimiter_");
+          if (layoutNames.has(name) || isDelim) {
+            updateNodeLayout();
           }
           return res;
         };
         
         const updateDelimiterOutputs = (count) => {
           if (!node.outputs) return;
-          const maxDelims = 20;
+          const safeCount = Math.max(0, Math.min(20, parseInt(count, 10) || 0));
           
           const currentOutputsCount = node.outputs.length;
-          const targetOutputsCount = 5 + count;
+          const targetOutputsCount = 5 + safeCount;
           
           if (currentOutputsCount < targetOutputsCount) {
             const startAddIdx = Math.max(1, currentOutputsCount - 5 + 1);
-            for (let i = startAddIdx; i <= count; i++) {
+            for (let i = startAddIdx; i <= safeCount; i++) {
               const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
               const label = delimW && delimW.value ? String(delimW.value).trim() : `Delimiter_${i}`;
               node.addOutput(label || `Delimiter_${i}`, "STRING");
             }
           } else if (currentOutputsCount > targetOutputsCount) {
             for (let i = currentOutputsCount - 1; i >= targetOutputsCount; i--) {
+              // Never drop a connected delimiter output — dangling links break Queue.
+              const out = node.outputs[i];
+              if (out && Array.isArray(out.links) && out.links.length > 0) {
+                break;
+              }
               node.removeOutput(i);
             }
           }
           
           // Rename output slots based on active delimiter widget values
-          for (let i = 1; i <= count; i++) {
+          for (let i = 1; i <= safeCount; i++) {
             const slotIdx = 4 + i;
             if (node.outputs[slotIdx]) {
               const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
@@ -3385,12 +3567,27 @@ app.registerExtension({
           }
         }, 100);
         
+        const originalOnSerialize = node.onSerialize;
         node.onSerialize = function(data) {
+          if (originalOnSerialize) {
+            originalOnSerialize.apply(this, arguments);
+          }
           if (node.widgets) {
             data.widgets_values_by_name = {};
             for (const w of node.widgets) {
               if (w && w.name) {
-                data.widgets_values_by_name[w.name] = w.value;
+                let val = w.value;
+                // Always serialize live chat state (not a stale widget.value).
+                if (w.name === "ui_widget" && node.chatbotUI?.buildWidgetPayload) {
+                  val = node.chatbotUI.buildWidgetPayload();
+                }
+                try {
+                  data.widgets_values_by_name[w.name] = JSON.parse(JSON.stringify(val ?? null));
+                } catch (e) {
+                  data.widgets_values_by_name[w.name] = w.name === "ui_widget"
+                    ? { config: {}, history: [], currentChatId: "", chatName: "", draft: "" }
+                    : null;
+                }
               }
             }
           }
