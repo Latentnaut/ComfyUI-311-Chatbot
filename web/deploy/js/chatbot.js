@@ -3133,32 +3133,129 @@ app.registerExtension({
         element.className = "chatbot311-container";
         
         const chatbot = new ChatbotUI(node, element);
-        
-        // ComfyUI V2 handles widget sizing via computeLayoutSize,
-        // reading getMinHeight/getMaxHeight from widget options.
-        // No manual computeSize overrides needed.
-        
-        let widget;
-        // ComfyUI BaseWidget.height is getter-only now — layout size comes from
-        // computeLayoutSize → getMinHeight/getMaxHeight. Return the remaining
-        // node height so the chat fills the node (not a 250px stub).
-        const chatFillHeight = () => {
-          const size = node.size;
-          if (!size || !size[1]) return 250;
-          const parent = widget?.element?.parentElement;
-          const topOffset = parent ? (parseFloat(parent.style.top) || 260) : 260;
-          return Math.max(250, Math.floor(size[1] - topOffset - 16));
+
+        // CDS §3.4 Resizable (MIL / Image-Selector):
+        // pin node.computeSize; widget height = node.size − chrome.
+        // NEVER report fill height via getMinHeight/computeLayoutSize (runaway growth).
+        // NEVER write parent.style.top (chat floats on drag).
+        const MIN_NODE_W = 320;
+        const MIN_NODE_H = 420;
+        const MIN_CHAT_H = 250;
+        const NODE_HEADER_H = 30;
+        const NODE_SLOT_H = 22;
+        const NODE_PADDING_V = 12;
+
+        node.computeSize = function () {
+          return [MIN_NODE_W, MIN_NODE_H];
         };
+        if (!node.size || node.size[0] < MIN_NODE_W || node.size[1] < MIN_NODE_H) {
+          if (node.setSize) node.setSize([380, 580]);
+          else node.size = [380, 580];
+        }
+
+        let widget;
+        let sizeObserver = null;
+        let syncingStyles = false;
+
+        const safeSetWidgetDim = (w, key, value) => {
+          try {
+            const desc = Object.getOwnPropertyDescriptor(w, key)
+              || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(w) || {}, key);
+            if (desc && desc.set) {
+              w[key] = value;
+              return;
+            }
+            if (!desc || desc.writable) {
+              w[key] = value;
+            }
+          } catch (_) {
+            /* ignore read-only */
+          }
+        };
+
+        const measureChromeHeight = () => {
+          const trueWidth = node.size?.[0] || 380;
+          let widgetH = 0;
+          for (const w of node.widgets || []) {
+            if (!w || w === widget || w.name === inputName || w.name === "ui_widget") continue;
+            if (typeof w.computeSize === "function") {
+              try {
+                const sz = w.computeSize(trueWidth);
+                const row = Array.isArray(sz) ? sz[1] : 20;
+                // Hidden rows use [0, -4] → net 0 after +4
+                widgetH += (row || 0) + 4;
+              } catch (_) {
+                widgetH += 30;
+              }
+            } else {
+              widgetH += 30;
+            }
+          }
+          // Widget-promoted sockets must not inflate chrome (classic canvas still has them).
+          const inCount = (node.inputs || []).filter((inp) => inp && !inp.widget).length;
+          const outCount = (node.outputs || []).length;
+          const slotsH = Math.max(inCount, outCount) * NODE_SLOT_H;
+          return NODE_HEADER_H + slotsH + widgetH + NODE_PADDING_V;
+        };
+
+        const applyChatGeometry = () => {
+          // ComfyUI passes inflated width while selected — always use node.size[0].
+          const trueWidth = node.size?.[0] || 380;
+          const nodeH = node.size?.[1] || MIN_NODE_H;
+          const parent = element.parentElement;
+          const top = parent ? parseFloat(parent.style.top) : NaN;
+
+          // Visual fill from live top when available; else chrome (IS/MIL).
+          // Layout size reported separately as fixed MIN — do not feed this h into getMinHeight.
+          let h;
+          if (Number.isFinite(top) && top > 40) {
+            h = Math.max(MIN_CHAT_H, Math.floor(nodeH - top - 4));
+          } else {
+            h = Math.max(MIN_CHAT_H, Math.floor(nodeH - measureChromeHeight()));
+          }
+          const targetWidth = Math.max(200, trueWidth - 20);
+
+          element.style.width = "100%";
+          element.style.height = `${h}px`;
+          element.style.boxSizing = "border-box";
+
+          if (parent) {
+            syncingStyles = true;
+            try {
+              parent.style.setProperty("width", `${targetWidth}px`, "important");
+              parent.style.setProperty("max-width", "none", "important");
+              parent.style.setProperty("height", `${h}px`, "important");
+              parent.style.setProperty("margin", "0px", "important");
+              parent.style.setProperty("padding", "0px", "important");
+              parent.style.setProperty("box-sizing", "border-box", "important");
+              // Clear any leftover min-height from earlier experiments (drove growth).
+              parent.style.removeProperty("min-height");
+              parent.style.removeProperty("max-height");
+            } finally {
+              queueMicrotask(() => { syncingStyles = false; });
+            }
+          }
+
+          if (widget) {
+            safeSetWidgetDim(widget, "width", targetWidth);
+            safeSetWidgetDim(widget, "height", h);
+          }
+          return [trueWidth, h];
+        };
+
         widget = node.addDOMWidget(inputName, "CHAT_311", element, {
           hideOnZoom: false,
+          // Fixed floor only — never report fill height to the layout engine.
           getMinHeight() {
-            return chatFillHeight();
+            return MIN_CHAT_H;
           },
-          getMaxHeight() {
-            return chatFillHeight();
+          computeSize() {
+            // Side-effect: size the DOM to fill. Return a fixed H so LiteGraph
+            // cannot feed node.size → fill → larger node (runaway).
+            applyChatGeometry();
+            return [node.size?.[0] || 380, MIN_CHAT_H];
           },
           getValue() {
-            // Always rebuild from the live textarea and mirror into widget.value.
             try {
               const val = chatbot.buildWidgetPayload();
               if (widget) widget.value = val;
@@ -3191,9 +3288,6 @@ app.registerExtension({
           }
         });
 
-        // Prefer serializeValue when ComfyUI uses it (skips stale widget.value).
-        // Must never throw: cg-use-everywhere swallows graphToPrompt errors and
-        // returns undefined, then pysssss scripts crash on res.output.
         widget.serializeValue = async () => {
           try {
             const val = chatbot.buildWidgetPayload();
@@ -3213,137 +3307,48 @@ app.registerExtension({
             return fallback;
           }
         };
-        
-        // No widget.computeSize or widget.draw overrides.
-        // ComfyUI V2 uses computeLayoutSize with getMinHeight from widget options.
-        // The chatbot fills remaining space via CSS height: 100%.
-        
-        node.chatbotWidget = widget;
-        node.chatbotUI = chatbot;
-        
-        let sizeObserver = null;
-        let observedParent = null;
-        let lastNodeWidth = 0;
-        let lastNodeHeight = 0;
-        let syncingStyles = false;
 
-        const safeSetWidgetSize = (w, key, value) => {
-          // ComfyUI frontend BaseWidget exposes width/height as getter-only;
-          // assigning throws and aborts clearChat → next Queue fails with
-          // "Cannot read properties of undefined (reading 'output')".
-          try {
-            const desc = Object.getOwnPropertyDescriptor(w, key)
-              || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(w) || {}, key);
-            if (desc && desc.set) {
-              w[key] = value;
-              return;
-            }
-            if (!desc || desc.writable) {
-              w[key] = value;
-            }
-          } catch (_) {
-            /* ignore read-only widget geometry */
-          }
+        // Pin layout reports to the floor. Fill is DOM-only via applyChatGeometry.
+        // Do not set maxHeight:MIN — that clamps the panel to a 250px stub.
+        widget.computeSize = function () {
+          applyChatGeometry();
+          return [node.size?.[0] || 380, MIN_CHAT_H];
+        };
+        widget.computeLayoutSize = function () {
+          applyChatGeometry();
+          return { minHeight: MIN_CHAT_H, minWidth: 0 };
         };
 
-        node.syncWidgetSize = (size) => {
+        node.chatbotWidget = widget;
+        node.chatbotUI = chatbot;
+
+        node.syncWidgetSize = () => {
           try {
-            const actualSize = size || node.size;
-            if (!actualSize) return;
-
-            if (widget.element && widget.element.parentElement) {
-              const parent = widget.element.parentElement;
-
-              // Rebind if ComfyUI replaced the DOM widget wrapper (common after content clears)
-              if (typeof MutationObserver !== "undefined") {
-                if (!sizeObserver) {
-                  sizeObserver = new MutationObserver(() => {
-                    if (!syncingStyles) node.syncWidgetSize();
-                  });
-                }
-                if (observedParent !== parent) {
-                  if (observedParent && sizeObserver) {
-                    sizeObserver.disconnect();
-                  }
-                  sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
-                  observedParent = parent;
-                }
+            applyChatGeometry();
+            const parent = element.parentElement;
+            if (parent && typeof MutationObserver !== "undefined") {
+              if (!sizeObserver) {
+                sizeObserver = new MutationObserver(() => {
+                  if (!syncingStyles) applyChatGeometry();
+                });
               }
-
-              const targetWidth = Math.max(200, actualSize[0] - 20);
-              const topOffset = parseFloat(parent.style.top) || 260;
-              const targetHeight = Math.max(250, actualSize[1] - topOffset - 16);
-              const styleWidth = parent.style.width;
-              const measuredWidth = parent.offsetWidth || 0;
-              // Safari/WebKit may report a correct style.width while the wrapper
-              // has collapsed to content width after clearing history.
-              const collapsed =
-                measuredWidth > 0 && measuredWidth < targetWidth - 2;
-              const needsSync =
-                actualSize[0] !== lastNodeWidth ||
-                actualSize[1] !== lastNodeHeight ||
-                styleWidth !== targetWidth + "px" ||
-                collapsed;
-
-              if (needsSync) {
-                lastNodeWidth = actualSize[0];
-                lastNodeHeight = actualSize[1];
-
-                safeSetWidgetSize(widget, "width", targetWidth);
-                safeSetWidgetSize(widget, "height", targetHeight);
-
-                syncingStyles = true;
-                if (sizeObserver) sizeObserver.disconnect();
-                try {
-                  parent.style.setProperty("width", targetWidth + "px", "important");
-                  parent.style.setProperty("min-width", targetWidth + "px", "important");
-                  parent.style.setProperty("max-width", "none", "important");
-                  parent.style.setProperty("margin", "0px", "important");
-                  parent.style.setProperty("padding", "0px", "important");
-                  parent.style.setProperty("box-sizing", "border-box", "important");
-
-                  widget.element.style.setProperty("width", "100%", "important");
-                  widget.element.style.setProperty("min-width", "100%", "important");
-                  widget.element.style.setProperty("max-width", "none", "important");
-                  widget.element.style.setProperty("margin", "0px", "important");
-                  widget.element.style.setProperty("box-sizing", "border-box", "important");
-
-                  parent.style.setProperty("height", targetHeight + "px", "important");
-                  parent.style.setProperty("min-height", targetHeight + "px", "important");
-                  widget.element.style.setProperty("height", "100%", "important");
-                  widget.element.style.setProperty("min-height", "100%", "important");
-                } finally {
-                  if (sizeObserver && parent.isConnected) {
-                    sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
-                    observedParent = parent;
-                  }
-                  // Defer so queued MutationRecords from our writes are ignored
-                  queueMicrotask(() => { syncingStyles = false; });
-                }
-              }
+              sizeObserver.disconnect();
+              sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
             }
           } catch (e) {
             console.warn("[Chatbot311] syncWidgetSize failed:", e);
           }
         };
+
         node.syncWidgetSize();
-        
-        if (!node.size || node.size[0] < 200 || node.size[1] < 200) {
-          node.size = [380, 580];
-          if (node.setSize) {
-            node.setSize([380, 580]);
-          }
-        }
-        
+
         const onRemoved = node.onRemoved;
-        node.onRemoved = function() {
-          if (sizeObserver) {
-            sizeObserver.disconnect();
-          }
+        node.onRemoved = function () {
+          if (sizeObserver) sizeObserver.disconnect();
           if (chatbot) chatbot.destroy();
           if (onRemoved) onRemoved.apply(this, arguments);
         };
-        
+
         return widget;
       }
     };
@@ -3379,7 +3384,7 @@ app.registerExtension({
         
         node.onResize = function(size) {
           if (node.syncWidgetSize) {
-            node.syncWidgetSize();
+            node.syncWidgetSize(size);
           }
           if (node.graph) {
             node.graph.setDirtyCanvas(true, true);
@@ -3497,6 +3502,11 @@ app.registerExtension({
           // 3. Chat input area visibility based on Bypass mode
           if (node.chatbotUI) {
             node.chatbotUI.updateInputAreaVisibility();
+          }
+
+          // Remeasure chat fill after hiding/showing delimiter rows.
+          if (node.syncWidgetSize) {
+            node.syncWidgetSize();
           }
           
           if (node.graph) {
