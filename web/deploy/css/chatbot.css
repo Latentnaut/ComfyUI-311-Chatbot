@@ -30,6 +30,7 @@
   background: var(--cb311-bg);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
+  isolation: isolate;
   border: 1px solid var(--cb311-border);
   border-radius: 12px;
   overflow: hidden;
@@ -448,7 +449,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  scroll-behavior: smooth;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
 }
 
 .chatbot311-messages::-webkit-scrollbar {

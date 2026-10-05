@@ -15,3 +15,6 @@ conversations/
 # Temporary / Debug files
 debug_key.txt
 *.bak
+
+# Shared CDS hub junction
+.cds/
