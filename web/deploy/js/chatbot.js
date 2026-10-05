@@ -527,11 +527,13 @@ class ChatbotUI {
     this.isGenerating = false;
     this.undoStack = [];
     this.undoBtn = null;
-    this.lastUsedModel = "gemini-3.5-flash";
+    this.lastUsedModel = "gemini-3.8-flash";
     this.connectedApiKey = "";
     this.connectedSystemGeneral = "";
     this.connectedSystemVariable = "";
     this.connectedProjectContext = "";
+    this._suppressSetValueRender = false;
+    this._lastSyncedPayload = null;
     
     this.buildUI();
     this.setupEventListeners();
@@ -649,6 +651,14 @@ class ChatbotUI {
   }
   
   setupEventListeners() {
+    // Clicks inside the chat must not reach LiteGraph. Otherwise the canvas
+    // clears (black flash through backdrop-filter) and the widget wrapper
+    // briefly collapses — feels like a mini scroll on every click.
+    const stopCanvasPointer = (e) => e.stopPropagation();
+    this.container.addEventListener("pointerdown", stopCanvasPointer);
+    this.container.addEventListener("mousedown", stopCanvasPointer);
+    this.container.addEventListener("wheel", stopCanvasPointer, { passive: true });
+
     this.sendBtn.addEventListener("click", () => this.sendMessage());
     if (this.confirmBtn) {
       this.confirmBtn.addEventListener("click", () => this.confirmResume());
@@ -666,9 +676,10 @@ class ChatbotUI {
         this.textarea.style.height = "auto";
         this.textarea.style.height = (this.textarea.scrollHeight) + "px";
       }
-      // Keep ui_widget.draft in sync on every keystroke so Queue never
-      // serializes a stale cached draft when the textarea looks empty.
-      this.updateNodeValue(true);
+      // Do NOT call updateNodeValue() here: assigning widget.value on every
+      // keystroke fires onWidgetChanged -> setDirtyCanvas / re-render, which
+      // causes microsaltos and a black flash (backdrop-filter). Draft is
+      // synced on blur, serializeValue, and the queuePrompt patch instead.
     });
 
     this.textarea.addEventListener("blur", () => {
@@ -759,9 +770,11 @@ class ChatbotUI {
       this.btnDeleteAll.addEventListener("click", () => this.deleteAllConversations());
     }
     
-    // Close sidebar clicking outside
+    // Close sidebar clicking outside (no-op if already closed — avoid class churn)
     this.messagesContainer.addEventListener("click", () => {
-      this.container.classList.remove("sidebar-open");
+      if (this.container.classList.contains("sidebar-open")) {
+        this.container.classList.remove("sidebar-open");
+      }
     });
     
     this.container.addEventListener("dragenter", (e) => {
@@ -1307,7 +1320,7 @@ class ChatbotUI {
         } else if (data.config && data.config.lastUsedModel) {
           this.updateModelBadge(data.config.lastUsedModel);
         } else {
-          this.updateModelBadge("gemini-3.5-flash");
+          this.updateModelBadge("gemini-3.8-flash");
         }
         
         this.updateNodeValue();
@@ -1810,13 +1823,21 @@ class ChatbotUI {
     const badge = this.container.querySelector("#model-badge");
     if (!badge) return;
     
-    let friendlyName = "Gemini 3.5";
+    let friendlyName = "Gemini 3.8";
     if (modelName) {
       const lower = modelName.toLowerCase();
-      if (lower.includes("gemini-3.5-flash") || lower.includes("gemini-3-5-flash")) {
+      if (lower.includes("gemini-3.8-flash") || lower.includes("gemini-3-8-flash")) {
+        friendlyName = "Gemini 3.8 Flash";
+      } else if (lower.includes("gemini-3.7-flash") || lower.includes("gemini-3-7-flash")) {
+        friendlyName = "Gemini 3.7 Flash";
+      } else if (lower.includes("gemini-3.6-flash") || lower.includes("gemini-3-6-flash")) {
+        friendlyName = "Gemini 3.6 Flash";
+      } else if (lower.includes("gemini-3.5-flash-lite") || lower.includes("gemini-3-5-flash-lite")) {
+        friendlyName = "Gemini 3.5 Flash Lite";
+      } else if (lower.includes("gemini-3.5-flash") || lower.includes("gemini-3-5-flash")) {
         friendlyName = "Gemini 3.5 Flash";
       } else if (lower.includes("gemini-3.1-flash-lite") || lower.includes("gemini-3-1-flash-lite")) {
-        friendlyName = "Gemini 3.1 Flash";
+        friendlyName = "Gemini 3.1 Flash Lite";
       } else if (lower.includes("gemini-3.1-pro")) {
         friendlyName = "Gemini 3.1 Pro";
       } else if (lower.includes("gemini-2.5-flash")) {
@@ -1841,9 +1862,14 @@ class ChatbotUI {
   
   setValue(val) {
     if (!val) return;
+    // Assigning widget.value always invokes this setter. Rebuilding the
+    // message list here wipes innerHTML (black flash) and smooth-scrolls.
+    if (this._suppressSetValueRender) return;
     let history = [];
     let config = {};
     let draft = "";
+    const prevHistory = this.history;
+    const prevChatId = this.currentChatId;
     
     try {
       const parsed = typeof val === "string" ? JSON.parse(val) : val;
@@ -1866,22 +1892,36 @@ class ChatbotUI {
       console.error("Error setting widget value:", e);
     }
     
+    const historyChanged = history !== prevHistory && (
+      !prevHistory ||
+      history.length !== prevHistory.length ||
+      (history.length > 0 && prevHistory.length > 0 && (
+        history[history.length - 1]?.role !== prevHistory[prevHistory.length - 1]?.role ||
+        history[history.length - 1]?.content !== prevHistory[prevHistory.length - 1]?.content
+      ))
+    );
+    const chatIdChanged = this.currentChatId !== prevChatId;
+
     this.history = history;
     this.config = config;
     if (this.config && this.config.lastUsedModel) {
       this.updateModelBadge(this.config.lastUsedModel);
     } else {
-      this.updateModelBadge("gemini-3.5-flash");
+      this.updateModelBadge("gemini-3.8-flash");
     }
-    if (this.textarea) {
+    if (this.textarea && document.activeElement !== this.textarea) {
       this.textarea.value = draft;
       this.textarea.style.height = "auto";
       if (draft) {
         this.textarea.style.height = (this.textarea.scrollHeight) + "px";
       }
     }
-    this.renderMessages();
-    this.fetchConversations();
+    if (historyChanged || this.messagesContainer.childElementCount === 0) {
+      this.renderMessages();
+    }
+    if (chatIdChanged) {
+      this.fetchConversations();
+    }
   }
   
   renderMessages() {
@@ -2560,7 +2600,7 @@ class ChatbotUI {
             id: conv.id,
             name: conv.name,
             history: conv.history,
-            model: conv.model || conv.config?.lastUsedModel || "gemini-3.5-flash"
+            model: conv.model || conv.config?.lastUsedModel || "gemini-3.8-flash"
           })
         });
         if (response.ok) {
@@ -2684,11 +2724,23 @@ class ChatbotUI {
 
   updateNodeValue(skipTrigger = true) {
     const val = this.buildWidgetPayload();
-    const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets[0];
+    const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets?.[0];
     if (widget) {
-      // Store as object (same shape as getValue) so paths that read
-      // widget.value instead of getValue() cannot reuse a stale draft.
-      widget.value = val;
+      const prev = this._lastSyncedPayload;
+      if (prev &&
+          prev.draft === val.draft &&
+          prev.history === val.history &&
+          prev.currentChatId === val.currentChatId) {
+        return;
+      }
+      // DOMWidget setter calls options.setValue → must not rebuild the chat.
+      this._suppressSetValueRender = true;
+      try {
+        widget.value = val;
+        this._lastSyncedPayload = val;
+      } finally {
+        this._suppressSetValueRender = false;
+      }
     }
     if (!skipTrigger) {
       this.node.trigger("change");
@@ -3071,10 +3123,9 @@ app.registerExtension({
             return 250;
           },
           getValue() {
-            // Always rebuild from the live textarea and mirror into widget.value.
-            const val = chatbot.buildWidgetPayload();
-            if (widget) widget.value = val;
-            return val;
+            // Live textarea is source of truth. Do NOT assign widget.value here:
+            // the DOMWidget setter calls setValue → renderMessages (black flash).
+            return chatbot.buildWidgetPayload();
           },
           setValue(val) {
             chatbot.setValue(val);
@@ -3095,7 +3146,12 @@ app.registerExtension({
         // Prefer serializeValue when ComfyUI uses it (skips stale widget.value).
         widget.serializeValue = async () => {
           const val = chatbot.buildWidgetPayload();
-          widget.value = val;
+          chatbot._suppressSetValueRender = true;
+          try {
+            widget.value = val;
+          } finally {
+            chatbot._suppressSetValueRender = false;
+          }
           return val;
         };
         
@@ -3120,7 +3176,12 @@ app.registerExtension({
             // Register MutationObserver once parent is available
             if (!sizeObserver && typeof MutationObserver !== "undefined") {
               sizeObserver = new MutationObserver(() => {
-                node.syncWidgetSize();
+                // Only restore when LiteGraph collapses the overlay (click/focus).
+                // Re-running on every style.top/transform write causes a 1px jump.
+                const host = widget.element?.parentElement;
+                if (host && host.offsetWidth > 0 && host.offsetWidth < 80) {
+                  node.syncWidgetSize();
+                }
               });
               sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
             }
@@ -3134,8 +3195,8 @@ app.registerExtension({
               lastNodeWidth = actualSize[0];
               lastNodeHeight = actualSize[1];
               
-              widget.width = targetWidth;
-              widget.height = targetHeight;
+              try { widget.width = targetWidth; } catch (_) {}
+              try { widget.height = targetHeight; } catch (_) {}
               
               parent.style.setProperty("width", targetWidth + "px", "important");
               parent.style.setProperty("max-width", "none", "important");
@@ -3208,17 +3269,18 @@ app.registerExtension({
           if (node.syncWidgetSize) {
             node.syncWidgetSize();
           }
-          if (node.graph) {
-            node.graph.setDirtyCanvas(true, true);
-          }
         };
         
         const originalOnWidgetChanged = node.onWidgetChanged;
         node.onWidgetChanged = function(name, value, oldValue) {
           const res = originalOnWidgetChanged ? originalOnWidgetChanged.apply(this, arguments) : undefined;
-          updateNodeLayout();
-          if (node.chatbotUI) {
-            node.chatbotUI.renderMessages();
+          // ui_widget updates (typing draft / clear / history sync) must NOT
+          // rebuild outputs or re-render chat — that causes black flash,
+          // scroll jumps, and raced graphToPrompt after trash.
+          const layoutNames = new Set(["mode", "sound_alert", "number_of_delimiters", "use_comfyui_credits"]);
+          const isDelim = typeof name === "string" && name.startsWith("delimiter_");
+          if (layoutNames.has(name) || isDelim) {
+            updateNodeLayout();
           }
           return res;
         };

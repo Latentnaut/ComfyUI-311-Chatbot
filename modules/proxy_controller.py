@@ -75,7 +75,7 @@ async def proxy_service(request: web.Request) -> web.Response:
                 if not history and body.get("prompt"):
                     history = [{"role": "user", "content": body.get("prompt")}]
                 
-                model = body.get("model") or cfg.get("default_model", "gemini-3.5-flash")
+                model = body.get("model") or cfg.get("default_model", "gemini-3.8-flash")
                 
                 info = {}
                 loop = asyncio.get_event_loop()
@@ -308,7 +308,7 @@ async def proxy_service_with_path(request: web.Request) -> web.Response:
                 if not history and body.get("prompt"):
                     history = [{"role": "user", "content": body.get("prompt")}]
                 
-                model = body.get("model") or cfg.get("default_model", "gemini-3.5-flash")
+                model = body.get("model") or cfg.get("default_model", "gemini-3.8-flash")
                 
                 info = {}
                 loop = asyncio.get_event_loop()

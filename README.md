@@ -76,8 +76,8 @@ Open the `.env` file in the node directory and set your API key and preferred mo
 # Google Gemini API Key
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# Model selection (defaults to gemini-3.5-flash)
-GEMINI_MODEL=gemini-3.5-flash
+# Model selection (defaults to gemini-3.8-flash)
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
 ---

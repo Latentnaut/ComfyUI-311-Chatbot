@@ -290,10 +290,14 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                 thread_res = []
                 thread_err = []
                 
-                actual_model = model or "gemini-3.5-flash"
+                actual_model = model or "gemini-3.8-flash"
                 # Map legacy or known different names, but let 3.5 models pass through to be tried first
-                if actual_model in ("gemini-3-1-flash-lite", "gemini-3.1-flash-lite"):
-                    actual_model = "gemini-3.1-flash-lite-preview"
+                if actual_model in ("gemini-3-1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"):
+                    # 3.1-flash-lite-preview was shut down on 2026-05-25
+                    actual_model = "gemini-3.5-flash-lite"
+                elif actual_model in ("gemini-3-5-pro", "gemini-3.5-pro"):
+                    # gemini-3.5-pro does not exist in the Gemini API; latest Pro is 3.1-pro-preview
+                    actual_model = "gemini-3.1-pro-preview"
                 elif actual_model in ("gemini-3-1-pro", "gemini-3.1-pro", "gemini-3-pro-preview"):
                     actual_model = "gemini-3.1-pro-preview"
                 elif actual_model in ("gemini-2.5-flash", "gemini-2.5-flash-preview"):
@@ -412,15 +416,16 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                          except Exception as first_exc:
                              # Determine fallback model
                              fallback_model = None
-                             if actual_model_used[0] == "gemini-3.5-flash":
-                                 fallback_model = "gemini-3.1-flash-lite-preview"
-                             elif actual_model_used[0] == "gemini-3.5-pro":
-                                 fallback_model = "gemini-3.1-pro-preview"
-                             elif actual_model_used[0] not in ("gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"):
+                             if actual_model_used[0] in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"):
+                                 # Newer Flash models may not be enabled on the ComfyUI proxy yet
+                                 fallback_model = "gemini-3.5-flash"
+                             elif actual_model_used[0] == "gemini-3.5-flash":
+                                 fallback_model = "gemini-3.5-flash-lite"
+                             elif actual_model_used[0] not in ("gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"):
                                  if "pro" in actual_model_used[0].lower():
                                      fallback_model = "gemini-3.1-pro-preview"
                                  else:
-                                     fallback_model = "gemini-3.1-flash-lite-preview"
+                                     fallback_model = "gemini-3.5-flash"
                              
                              if fallback_model:
                                  LOG.warning("ComfyUI Credits call with %s failed: %s. Retrying with fallback model %s...", actual_model_used[0], first_exc, fallback_model)
@@ -480,7 +485,7 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
     cfg = proxy_svc.SERVICES.get("gemini", {})
     proxypath = "v1/chat/completions"
     
-    actual_model_used = model or cfg.get("default_model", "gemini-3.5-flash")
+    actual_model_used = model or cfg.get("default_model", "gemini-3.8-flash")
     if isinstance(info, dict):
         info["model"] = actual_model_used
 
@@ -1025,7 +1030,7 @@ class Chatbot311:
             if actual_mode in ("LLM Chat (Pause & Confirm)", "LLM One-Shot (Immediate)"):
                 if should_query_llm:
                     try:
-                        model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+                        model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
                         
                         # Prepend system prompt to temp list for API call
                         api_messages = []
@@ -1226,7 +1231,7 @@ class Chatbot311:
         elif actual_mode == "LLM One-Shot (Immediate)" and not has_new_input:
             if history and history[-1].get("role") == "user":
                 try:
-                    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+                    model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
                     
                     # Prepend system prompt to temp list for API call
                     api_messages = []
@@ -1343,7 +1348,7 @@ class Chatbot311:
             delim_outs.append(delim_val)
 
         # Resolve the model name
-        model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+        model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
         actual_model = info.get("model") if 'info' in locals() and "model" in info else ui_widget.get("config", {}).get("lastUsedModel", model)
         if "config" not in ui_widget or not isinstance(ui_widget["config"], dict):
             ui_widget["config"] = {}

@@ -13,7 +13,7 @@ SERVICES: Dict[str, Dict[str, Any]] = {
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "api_key_env": "GEMINI_API_KEY",
         "api_key_header": "X-goog-api-key",
-        "default_model": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+        "default_model": os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
         "timeout": 60,
     }
 }
@@ -87,7 +87,7 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     if isinstance(forward_body, dict):
         forward_body = dict(forward_body)
         if "model" not in forward_body:
-            forward_body["model"] = os.environ.get("GEMINI_MODEL") or cfg.get("default_model", "gemini-3.5-flash")
+            forward_body["model"] = os.environ.get("GEMINI_MODEL") or cfg.get("default_model", "gemini-3.8-flash")
 
     # Map OpenAI-compatible endpoints (like v1/chat/completions) to Gemini's beta openai endpoint.
     # Official base is .../v1beta/openai/ + chat/completions (NOT .../openai/v1/chat/completions).
