@@ -13,12 +13,20 @@ SERVICES: Dict[str, Dict[str, Any]] = {
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "api_key_env": "GEMINI_API_KEY",
         "api_key_header": "X-goog-api-key",
-        "default_model": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+        "default_model": os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
         "timeout": 60,
     }
 }
 
 def _read_secret(env_name: str, file_env_name: Optional[str] = None) -> Optional[str]:
+    # Reload .env at runtime to capture any updates without restarting ComfyUI
+    try:
+        from pathlib import Path
+        from .chatbot_utils import maybe_load_dotenv
+        repo_root = Path(__file__).resolve().parent.parent
+        maybe_load_dotenv(repo_root / ".env")
+    except Exception:
+        pass
     # Try reading environment variable directly
     val = os.environ.get(env_name)
     if val:
@@ -29,25 +37,27 @@ PROXY_SECRET = None
 PROXY_SECRET_HEADER = "X-Proxy-Secret"
 
 def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxypath: Optional[str], user_api_key: Optional[str] = None) -> Tuple[str, Dict[str, str], int, Dict[str, Any]]:
+    # Reload .env at runtime to capture any updates without restarting ComfyUI
+    try:
+        from pathlib import Path
+        from .chatbot_utils import maybe_load_dotenv
+        repo_root = Path(__file__).resolve().parent.parent
+        maybe_load_dotenv(repo_root / ".env")
+    except Exception:
+        pass
+
     headers: Dict[str, str] = {}
     timeout = int(cfg.get("timeout", 60))
     
     key = (user_api_key or "").strip()
     
-    # Debug logging
+    # Log key presence and length instead of raw value
     env_key = os.environ.get("GEMINI_API_KEY")
-    try:
-        from pathlib import Path
-        log_file = Path(__file__).resolve().parent.parent / "debug_key.txt"
-        log_file.write_text(
-            f"user_api_key: {repr(user_api_key)}\n"
-            f"env_api_key: {repr(env_key)}\n"
-            f"key_after_strip: {repr(key)}\n",
-            encoding="utf-8"
-        )
-        LOG.info(f"[Chatbot311 Debug] user_api_key={repr(user_api_key)}, env_api_key={repr(env_key)}, key_after_strip={repr(key)}")
-    except Exception as e:
-        LOG.error("Failed to write debug_key.txt: %s", e)
+    LOG.info(
+        f"[Chatbot311 Auth] user_api_key present: {bool(user_api_key)} (len={len(user_api_key) if user_api_key else 0}), "
+        f"env_api_key present: {bool(env_key)} (len={len(env_key) if env_key else 0}), "
+        f"resolved_key present: {bool(key)} (len={len(key) if key else 0})"
+    )
         
     import re
     if (not key or 
@@ -69,7 +79,7 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     if proxypath:
         upstream = base_url.rstrip("/") + "/" + proxypath.lstrip("/")
     else:
-        model = body.get("model") or cfg.get("default_model")
+        model = body.get("model") or os.environ.get("GEMINI_MODEL") or cfg.get("default_model")
         path = "/v1beta/models/{model}:generateContent".format(model=model)
         upstream = base_url.rstrip("/") + path
 
@@ -77,11 +87,16 @@ def _build_upstream_and_headers(cfg: Dict[str, Any], body: Dict[str, Any], proxy
     if isinstance(forward_body, dict):
         forward_body = dict(forward_body)
         if "model" not in forward_body:
-            forward_body["model"] = cfg.get("default_model", "gemini-3.5-flash")
+            forward_body["model"] = os.environ.get("GEMINI_MODEL") or cfg.get("default_model", "gemini-3.8-flash")
 
-    # Map OpenAI-compatible endpoints (like v1/chat/completions) to Gemini's beta openai endpoint
+    # Map OpenAI-compatible endpoints (like v1/chat/completions) to Gemini's beta openai endpoint.
+    # Official base is .../v1beta/openai/ + chat/completions (NOT .../openai/v1/chat/completions).
+    # See: https://ai.google.dev/gemini-api/docs/openai
     if proxypath and proxypath.lstrip("/").startswith("v1/"):
-        upstream = base_url.rstrip("/") + "/v1beta/openai/" + proxypath.lstrip("/")
+        openai_path = proxypath.lstrip("/")
+        if openai_path.startswith("v1/"):
+            openai_path = openai_path[3:]
+        upstream = base_url.rstrip("/") + "/v1beta/openai/" + openai_path
         if api_token:
             headers["Authorization"] = f"Bearer {api_token}"
         # Strip fields not supported by Gemini's OpenAI-compatible endpoint

@@ -34,9 +34,13 @@ def maybe_load_dotenv(path: Path) -> None:
             k = k.strip()
             v = v.strip().strip('"').strip("'")
             if k:
-                curr = os.environ.get(k)
-                if curr is None or curr.strip() == "" or curr.lower() in ("your_api_key_here", "undefined", "null", "none"):
-                    os.environ[k] = v
+                v_clean = v.strip()
+                # If the value in .env is a real key, always overwrite the environment variable to allow runtime changes.
+                # If it's a placeholder, only set it if no value is currently present.
+                if v_clean.lower() not in ("your_api_key_here", "undefined", "null", "none"):
+                    os.environ[k] = v_clean
+                elif not os.environ.get(k):
+                    os.environ[k] = v_clean
     except Exception:
         _LOG.exception("failed to load .env at %s", path)
 # endregion

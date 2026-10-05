@@ -98,12 +98,60 @@ const checkSvg = `
   </svg>
 `;
 
+async function getFirebaseIndexedDBToken() {
+    return new Promise((resolve) => {
+        try {
+            const request = indexedDB.open("firebaseLocalStorageDb");
+            request.onsuccess = (event) => {
+                const db = event.target.result;
+                try {
+                    const transaction = db.transaction(["firebaseLocalStorage"], "readonly");
+                    const store = transaction.objectStore("firebaseLocalStorage");
+                    const getAllRequest = store.getAll();
+                    getAllRequest.onsuccess = () => {
+                        const records = getAllRequest.result;
+                        for (const record of records || []) {
+                            if (record && record.value && record.value.stsTokenManager && record.value.stsTokenManager.accessToken) {
+                                resolve(record.value.stsTokenManager.accessToken);
+                                return;
+                            }
+                        }
+                        resolve(null);
+                    };
+                    getAllRequest.onerror = () => resolve(null);
+                } catch (e) {
+                    resolve(null);
+                }
+            };
+            request.onerror = () => resolve(null);
+        } catch (e) {
+            resolve(null);
+        }
+    });
+}
+
+function sanitizeHeaderValue(val) {
+  if (!val) return "";
+  // Strip out any characters outside the ISO-8859-1 range (char codes 0-255)
+  return String(val).replace(/[^\x00-\xff]/g, "");
+}
+
+
 const editPenSvg = `
   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M12 20h9"></path>
     <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
   </svg>
 `;
+
+const warningSvg = `
+  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+    <line x1="12" y1="9" x2="12" y2="13"></line>
+    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+  </svg>
+`;
+
 
 // Inject CSS stylesheet dynamically
 const link = document.createElement("link");
@@ -128,14 +176,30 @@ function parseMarkdown(text, delimiters = []) {
   let html = text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
     const id = `__CODE_BLOCK_${codeBlocks.length}__`;
     const rawCode = code.trim();
-    // Escape for HTML rendering only
-    const escapedCodeForHtml = rawCode
+    if (lang && lang.toLowerCase() === "mermaid") {
+      codeBlocks.push(`<div class="chatbot311-mermaid-container"><div class="mermaid-raw" style="display: none;">${rawCode}</div><div class="mermaid-preview">Rendering diagram...</div></div>`);
+    } else {
+      // Escape for HTML rendering only
+      const escapedCodeForHtml = rawCode
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+        
+      // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
+      codeBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-${lang}">${escapedCodeForHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawCode)}" title="Copy code">${copySvg}</button></div>`);
+    }
+    return id;
+  });
+
+  // 1b. Extract inline code blocks from raw text before escaping HTML
+  const inlineCodeBlocks = [];
+  html = html.replace(/`([^`]+)`/g, (match, code) => {
+    const id = `__INLINE_CODE_${inlineCodeBlocks.length}__`;
+    const escapedCode = code
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
-      
-    // SINGLE LINE template string to avoid white-space rendering issues in pre-wrap
-    codeBlocks.push(`<div class="chatbot311-codeblock-container"><pre><code class="language-${lang}">${escapedCodeForHtml}</code></pre><button class="chatbot311-codeblock-copy-btn" data-raw-prompt="${encodeURIComponent(rawCode)}" title="Copy code">${copySvg}</button></div>`);
+    inlineCodeBlocks.push(`<code>${escapedCode}</code>`);
     return id;
   });
   
@@ -144,9 +208,6 @@ function parseMarkdown(text, delimiters = []) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-    
-  // 3. Inline code
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   
   // 4. Wrap custom delimiters in code blocks
   const customDelimBlocks = [];
@@ -159,7 +220,7 @@ function parseMarkdown(text, delimiters = []) {
       const escapedStartHtmlRegex = escapedStartHtml.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       const escapedEndHtmlRegex = escapedEndHtml.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
-      const regex = new RegExp(escapedStartHtmlRegex + '([\\s\\S]*?)' + escapedEndHtmlRegex, 'gm');
+      const regex = new RegExp(escapedStartHtmlRegex + '((?:(?!' + escapedStartHtmlRegex + ')[\\s\\S])*?)' + escapedEndHtmlRegex, 'gm');
       html = html.replace(regex, (match, content) => {
         const id = `__CUSTOM_DELIM_${customDelimBlocks.length}__`;
         const rawContent = unescapeHtml(content.trim());
@@ -315,12 +376,38 @@ function parseMarkdown(text, delimiters = []) {
   codeBlocks.forEach((block, idx) => {
     html = html.replace(`__CODE_BLOCK_${idx}__`, block);
   });
+
+  inlineCodeBlocks.forEach((block, idx) => {
+    html = html.replace(`__INLINE_CODE_${idx}__`, block);
+  });
   
   customDelimBlocks.forEach((block, idx) => {
     html = html.replace(`__CUSTOM_DELIM_${idx}__`, block);
   });
   
   return html;
+}
+
+let mermaidInitialized = false;
+let mermaidModule = null;
+
+async function initMermaid() {
+  if (mermaidInitialized) return mermaidModule;
+  try {
+    const module = await import("https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs");
+    mermaidModule = module.default || module;
+    mermaidModule.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      securityLevel: 'loose',
+      flowchart: { useMaxWidth: true, htmlLabels: true }
+    });
+    mermaidInitialized = true;
+    return mermaidModule;
+  } catch (e) {
+    console.error("Failed to initialize Mermaid:", e);
+    return null;
+  }
 }
 
 // Check for connected images in LiteGraph
@@ -414,6 +501,17 @@ async function getConnectedImages(node) {
   return [];
 }
 
+function deriveDelimiterTags(val, index) {
+  if (!val || !val.trim()) {
+    return { start: `<prompt_${index}>`, end: `</prompt_${index}>` };
+  }
+  const tag = val.trim().replace(/^<+/, "").replace(/>+$/, "").replace(/^\/+/, "");
+  if (!tag) {
+    return { start: `<prompt_${index}>`, end: `</prompt_${index}>` };
+  }
+  return { start: `<${tag}>`, end: `</${tag}>` };
+}
+
 class ChatbotUI {
   constructor(node, container) {
     this.node = node;
@@ -429,6 +527,13 @@ class ChatbotUI {
     this.isGenerating = false;
     this.undoStack = [];
     this.undoBtn = null;
+    this.lastUsedModel = "gemini-3.8-flash";
+    this.connectedApiKey = "";
+    this.connectedSystemGeneral = "";
+    this.connectedSystemVariable = "";
+    this.connectedProjectContext = "";
+    this._suppressSetValueRender = false;
+    this._lastSyncedPayload = null;
     
     this.buildUI();
     this.setupEventListeners();
@@ -449,6 +554,12 @@ class ChatbotUI {
           <button class="chatbot311-btn-menu" id="btn-close-sidebar" title="Close Sidebar">${xSvg}</button>
         </div>
         <div class="chatbot311-conv-list" id="conv-list"></div>
+        <div class="chatbot311-sidebar-footer">
+          <button class="chatbot311-btn-delete-all" id="btn-delete-all" title="Delete all conversations">
+            ${trashSvg}
+            <span>Delete all conversations</span>
+          </button>
+        </div>
       </div>
 
       <div class="chatbot311-header">
@@ -503,6 +614,7 @@ class ChatbotUI {
     
     this.sidebar = this.container.querySelector("#sidebar");
     this.convList = this.container.querySelector("#conv-list");
+    this.btnDeleteAll = this.container.querySelector("#btn-delete-all");
     this.messagesContainer = this.container.querySelector("#msg-container");
     this.previewBar = this.container.querySelector("#preview-bar");
     this.confirmBanner = this.container.querySelector("#confirm-banner");
@@ -539,13 +651,21 @@ class ChatbotUI {
   }
   
   setupEventListeners() {
+    // Clicks inside the chat must not reach LiteGraph. Otherwise the canvas
+    // clears (black flash through backdrop-filter) and the widget wrapper
+    // briefly collapses — feels like a mini scroll on every click.
+    const stopCanvasPointer = (e) => e.stopPropagation();
+    this.container.addEventListener("pointerdown", stopCanvasPointer);
+    this.container.addEventListener("mousedown", stopCanvasPointer);
+    this.container.addEventListener("wheel", stopCanvasPointer, { passive: true });
+
     this.sendBtn.addEventListener("click", () => this.sendMessage());
     if (this.confirmBtn) {
       this.confirmBtn.addEventListener("click", () => this.confirmResume());
     }
     
     this.textarea.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         this.sendMessage();
       }
@@ -556,6 +676,10 @@ class ChatbotUI {
         this.textarea.style.height = "auto";
         this.textarea.style.height = (this.textarea.scrollHeight) + "px";
       }
+      // Do NOT call updateNodeValue() here: assigning widget.value on every
+      // keystroke fires onWidgetChanged -> setDirtyCanvas / re-render, which
+      // causes microsaltos and a black flash (backdrop-filter). Draft is
+      // synced on blur, serializeValue, and the queuePrompt patch instead.
     });
 
     this.textarea.addEventListener("blur", () => {
@@ -642,10 +766,15 @@ class ChatbotUI {
     this.btnCloseSidebar.addEventListener("click", () => {
       this.container.classList.remove("sidebar-open");
     });
+    if (this.btnDeleteAll) {
+      this.btnDeleteAll.addEventListener("click", () => this.deleteAllConversations());
+    }
     
-    // Close sidebar clicking outside
+    // Close sidebar clicking outside (no-op if already closed — avoid class churn)
     this.messagesContainer.addEventListener("click", () => {
-      this.container.classList.remove("sidebar-open");
+      if (this.container.classList.contains("sidebar-open")) {
+        this.container.classList.remove("sidebar-open");
+      }
     });
     
     this.container.addEventListener("dragenter", (e) => {
@@ -670,9 +799,12 @@ class ChatbotUI {
     });
     
     api.addEventListener("chatbot311-update-history", (event) => {
-      const { node_id, history, clear_draft } = event.detail;
+      const { node_id, history, clear_draft, model } = event.detail;
       if (String(node_id) === String(this.node.id)) {
         this.history = history;
+        if (model) {
+          this.updateModelBadge(model);
+        }
         this.renderMessages();
         if (clear_draft && this.textarea) {
           this.textarea.value = "";
@@ -686,8 +818,13 @@ class ChatbotUI {
     });
 
     api.addEventListener("chatbot311-chat-paused", (event) => {
-      const { node_id, sound_alert } = event.detail;
+      const { node_id, sound_alert, api_key, system_general, system_variable, project_context } = event.detail;
       if (String(node_id) === String(this.node.id)) {
+        if (api_key) this.connectedApiKey = api_key;
+        if (system_general) this.connectedSystemGeneral = system_general;
+        if (system_variable) this.connectedSystemVariable = system_variable;
+        if (project_context) this.connectedProjectContext = project_context;
+
         if (this.confirmBanner) {
           this.confirmBanner.style.display = "flex";
         }
@@ -725,6 +862,7 @@ class ChatbotUI {
           this.confirmBanner.style.display = "none";
         }
         this.isGenerating = false;
+        this.clearConnectedCredentials();
       } else {
         // Node started executing!
         // If there is draft text in the textarea, simulate sending it
@@ -740,22 +878,26 @@ class ChatbotUI {
             let startD = "<prompt_1>";
             let endD = "</prompt_1>";
             if (count >= 1) {
-              const startW = this.node.widgets?.find(w => w && w.name === "starting_delimiter_1");
-              const endW = this.node.widgets?.find(w => w && w.name === "ending_delimiter_1");
-              if (startW && endW) {
-                startD = startW.value;
-                endD = endW.value;
+              const delimW = this.node.widgets?.find(w => w && w.name === "delimiter_1");
+              if (delimW) {
+                const { start, end } = deriveDelimiterTags(delimW.value, 1);
+                startD = start;
+                endD = end;
               }
             }
             const wrappedText = `${startD}\n${text}\n${endD}`;
             this.history.push({ role: "assistant", content: wrappedText });
             this.renderMessages();
-            this.textarea.value = "";
-            this.textarea.style.height = "auto";
-            this.isTextareaResized = false;
+            // One-Shot keeps the draft so the next Queue Prompt reuses the same prompt
+            if (currentMode === "Manual (Pause & Confirm)") {
+              this.textarea.value = "";
+              this.textarea.style.height = "auto";
+              this.isTextareaResized = false;
+            }
             this.pendingAttachments = [];
             this.fileInput.value = "";
             this.updatePreviewBar();
+            this.updateNodeValue();
             this.saveActiveConversation();
           } else if (!this.isGenerating) {
             const allAttachments = [...(this.pendingAttachments || []), ...(this.connectedAttachments || [])];
@@ -772,13 +914,17 @@ class ChatbotUI {
             }
             this.history.push({ role: "user", content });
             this.renderMessages();
-            
-            this.textarea.value = "";
-            this.textarea.style.height = "auto";
-            this.isTextareaResized = false;
+
+            // One-Shot keeps the draft so the next Queue Prompt reuses the same prompt
+            if (currentMode !== "LLM One-Shot (Immediate)") {
+              this.textarea.value = "";
+              this.textarea.style.height = "auto";
+              this.isTextareaResized = false;
+            }
             this.pendingAttachments = [];
             this.fileInput.value = "";
             this.updatePreviewBar();
+            this.updateNodeValue();
             
             this.showTypingIndicator(true);
             this.isGenerating = true;
@@ -794,6 +940,7 @@ class ChatbotUI {
       }
       this.isGenerating = false;
       this.showTypingIndicator(false);
+      this.clearConnectedCredentials();
     };
     api.addEventListener("execution_interrupted", this._onExecutionInterrupted);
 
@@ -803,6 +950,7 @@ class ChatbotUI {
       }
       this.isGenerating = false;
       this.showTypingIndicator(false);
+      this.clearConnectedCredentials();
     };
     api.addEventListener("execution_error", this._onExecutionError);
 
@@ -899,6 +1047,54 @@ class ChatbotUI {
     }
   }
 
+  showConfirmDialog(message) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "chatbot311-confirm-modal-overlay";
+      overlay.innerHTML = `
+        <div class="chatbot311-confirm-modal-card">
+          <div class="chatbot311-confirm-modal-icon">
+            ${warningSvg}
+          </div>
+          <div class="chatbot311-confirm-modal-content">
+            <p>${message}</p>
+          </div>
+          <div class="chatbot311-confirm-modal-actions">
+            <button class="chatbot311-confirm-modal-btn cancel" id="confirm-modal-btn-cancel">Cancel</button>
+            <button class="chatbot311-confirm-modal-btn confirm" id="confirm-modal-btn-confirm">Confirm</button>
+          </div>
+        </div>
+      `;
+      
+      this.container.appendChild(overlay);
+      
+      const card = overlay.querySelector(".chatbot311-confirm-modal-card");
+      
+      requestAnimationFrame(() => {
+        overlay.classList.add("active");
+        card.classList.add("active");
+      });
+      
+      const cleanUp = (result) => {
+        overlay.classList.remove("active");
+        card.classList.remove("active");
+        setTimeout(() => {
+          overlay.remove();
+          resolve(result);
+        }, 200);
+      };
+      
+      overlay.querySelector("#confirm-modal-btn-confirm").addEventListener("click", () => cleanUp(true));
+      overlay.querySelector("#confirm-modal-btn-cancel").addEventListener("click", () => cleanUp(false));
+      
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) {
+          cleanUp(false);
+        }
+      });
+    });
+  }
+
   async confirmResume() {
     if (!this.confirmBtn) return;
     this.confirmBtn.disabled = true;
@@ -919,6 +1115,7 @@ class ChatbotUI {
           if (this.confirmBanner) {
             this.confirmBanner.style.display = "none";
           }
+          this.clearConnectedCredentials();
         } else {
           console.error("Failed to resume chat:", data.error);
         }
@@ -935,6 +1132,12 @@ class ChatbotUI {
     try {
       const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
       let apiKey = apiKeyWidget ? String(apiKeyWidget.value || "").trim() : "";
+      if (!apiKey) {
+        apiKey = String(this.getConnectedInputValue("api_key") || "").trim();
+      }
+      if (!apiKey && this.connectedApiKey) {
+        apiKey = this.connectedApiKey;
+      }
       if (apiKey && (
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
@@ -945,8 +1148,54 @@ class ChatbotUI {
         apiKey = "";
       }
       const headers = {};
+      headers["X-Chatbot-Node-Id"] = this.node.id.toString();
       if (apiKey) {
-        headers["X-Gemini-API-Key"] = apiKey;
+        headers["X-Gemini-API-Key"] = sanitizeHeaderValue(apiKey);
+      }
+      
+      const useCreditsWidget = this.node.widgets?.find(w => w && w.name === "use_comfyui_credits");
+      const useCredits = useCreditsWidget ? !!useCreditsWidget.value : false;
+      if (useCredits) {
+        headers["X-Use-ComfyUI-Credits"] = "true";
+      }
+      
+      let authToken = "";
+      const authWidget = this.node.widgets?.find(w => w && w.name === "auth_token_comfy_org");
+      if (authWidget && authWidget.value) {
+        authToken = String(authWidget.value).trim();
+      }
+      // Primary fallback: use the same properties ComfyUI frontend uses in queuePrompt
+      if (!authToken && api.authToken) {
+        authToken = api.authToken;
+      }
+      if (!authToken && api.apiKey) {
+        authToken = api.apiKey;
+      }
+      if (!authToken) {
+        try {
+          const authStore = await api.getAuthStore?.();
+          if (authStore) {
+            if (typeof authStore.getAuthToken === "function") {
+              authToken = await authStore.getAuthToken();
+            } else if (typeof authStore.getIdToken === "function") {
+              authToken = await authStore.getIdToken();
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to get auth token from ComfyUI auth store:", err);
+        }
+      }
+      if (!authToken) {
+        try {
+          authToken = localStorage.getItem("comfy_org_token") || localStorage.getItem("comfy_api_key") || "";
+        } catch (e) {}
+      }
+      if (!authToken) {
+        authToken = await getFirebaseIndexedDBToken() || "";
+      }
+      authToken = (authToken || "").trim();
+      if (authToken) {
+        headers["X-Comfy-Org-Auth-Token"] = sanitizeHeaderValue(authToken);
       }
       
       const response = await fetch("/chatbot-311/proxy/gemini", { headers });
@@ -1065,6 +1314,15 @@ class ChatbotUI {
         this.undoStack = [];
         this.updateUndoButtonVisibility();
         this.renderMessages();
+        
+        if (data.model) {
+          this.updateModelBadge(data.model);
+        } else if (data.config && data.config.lastUsedModel) {
+          this.updateModelBadge(data.config.lastUsedModel);
+        } else {
+          this.updateModelBadge("gemini-3.8-flash");
+        }
+        
         this.updateNodeValue();
         this.container.classList.remove("sidebar-open");
         this.fetchConversations();
@@ -1097,7 +1355,8 @@ class ChatbotUI {
         body: JSON.stringify({
           id: this.currentChatId,
           name: this.chatName,
-          history: this.history
+          history: this.history,
+          model: this.lastUsedModel
         })
       });
       if (response.ok) {
@@ -1112,9 +1371,25 @@ class ChatbotUI {
   
   async deleteConversation(id, event) {
     event.stopPropagation();
-    if (!confirm("Are you sure you want to delete this conversation?")) return;
     
     try {
+      // Fetch details of conversation to allow Undo before deleting
+      if (id === this.currentChatId) {
+        this.saveUndoState();
+      } else {
+        const fetchResp = await fetch(`/chatbot-311/conversations/${id}`);
+        if (fetchResp.ok) {
+          const data = await fetchResp.json();
+          if (!this.undoStack) this.undoStack = [];
+          this.undoStack.push(JSON.stringify({
+            type: "deleted_sidebar_chat",
+            conversation: data
+          }));
+          if (this.undoStack.length > 10) this.undoStack.shift();
+          this.updateUndoButtonVisibility();
+        }
+      }
+
       const response = await fetch(`/chatbot-311/conversations/${id}`, {
         method: "DELETE"
       });
@@ -1124,12 +1399,29 @@ class ChatbotUI {
         } else {
           this.fetchConversations();
         }
+        this.triggerUndoHint();
       }
     } catch (e) {
       console.error("Failed deleting conversation:", e);
     }
   }
   
+  async deleteAllConversations() {
+    const confirmed = await this.showConfirmDialog("Are you sure you want to delete all conversations? This action cannot be undone.");
+    if (!confirmed) return;
+    
+    try {
+      const response = await fetch(`/chatbot-311/conversations`, {
+        method: "DELETE"
+      });
+      if (response.ok) {
+        this.startNewChat();
+      }
+    } catch (e) {
+      console.error("Failed deleting all conversations:", e);
+    }
+  }
+
   startNewChat() {
     this.currentChatId = 'chat_' + Math.random().toString(36).substring(2, 15);
     this.chatName = "";
@@ -1141,6 +1433,13 @@ class ChatbotUI {
     this.container.classList.remove("sidebar-open");
     this.fetchConversations();
   }
+
+  clearConnectedCredentials() {
+    this.connectedApiKey = "";
+    this.connectedSystemGeneral = "";
+    this.connectedSystemVariable = "";
+    this.connectedProjectContext = "";
+  }
   
   getConnectedInputValue(inputName) {
     const inputIdx = this.node.inputs ? this.node.inputs.findIndex(input => input.name === inputName) : -1;
@@ -1149,14 +1448,227 @@ class ChatbotUI {
     const linkId = this.node.inputs[inputIdx].link;
     if (!linkId) return null;
     
-    const link = app.graph.links[linkId];
+    let link = app.graph.links[linkId];
     if (!link) return null;
     
-    const originNode = app.graph.getNodeById(link.origin_id);
+    let originNode = app.graph.getNodeById(link.origin_id);
     if (!originNode) return null;
     
+    let originSlot = link.origin_slot;
+    
+    console.log(`[Chatbot311] getConnectedInputValue: inputName = '${inputName}', originNode type = '${originNode.type}', id = #${originNode.id}`); // gga-allow
+    
+    // Resolve routing/switch nodes (like AnySwitch311) and wireless variables (like GetNode) recursively to find the actual active source node
+    while (originNode) {
+      const typeLower = originNode.type ? originNode.type.toLowerCase() : "";
+      
+      const isSwitch = typeLower.includes("switch") || 
+                       typeLower.includes("router") || 
+                       typeLower.includes("selector");
+                       
+      const isGetNode = typeLower === "getnode" || typeLower === "get_node" || originNode.findSetter;
+                       
+      if (isSwitch) {
+        // Find the index widget robustly
+        const getIndexWidget = (node) => {
+          if (!node.widgets) return null;
+          let w = node.widgets.find(x => x && x.name && x.name.toLowerCase() === "index");
+          if (w) return w;
+          w = node.widgets.find(x => x && x.name && (x.name.toLowerCase().includes("select") || x.name.toLowerCase().includes("active") || x.name.toLowerCase().includes("switch")));
+          if (w) return w;
+          w = node.widgets.find(x => x && (x.type === "number" || x.type === "slider" || x.type === "integer" || x.type === "combo"));
+          if (w) return w;
+          return node.widgets[0];
+        };
+        
+        const indexWidget = getIndexWidget(originNode);
+        
+        // Parse active index (could be integer or combo option string)
+        let activeIdx = 0;
+        if (indexWidget) {
+          const val = indexWidget.value;
+          if (typeof val === "number") {
+            activeIdx = val;
+          } else if (typeof val === "string") {
+            const numMatch = val.match(/\d+/);
+            if (numMatch) {
+              activeIdx = parseInt(numMatch[0], 10);
+            } else {
+              if (indexWidget.options && Array.isArray(indexWidget.options.values)) {
+                const optIdx = indexWidget.options.values.indexOf(val);
+                if (optIdx !== -1) activeIdx = optIdx;
+              }
+            }
+          }
+        }
+        
+        console.log(`[Chatbot311] Resolving switch node #${originNode.id} (${originNode.type}). Active index: ${activeIdx}`); // gga-allow
+        
+        // Filter inputs to get data inputs (exclude index/select control inputs)
+        const dataInputs = (originNode.inputs || []).filter(inp => inp && inp.name !== "index" && inp.name !== "select");
+        const activeInput = dataInputs[activeIdx];
+        
+        if (!activeInput) {
+          console.warn(`[Chatbot311] Active input at index ${activeIdx} not found on switch #${originNode.id}`);
+          break;
+        }
+        
+        const nextLinkId = activeInput.link;
+        if (!nextLinkId) {
+          console.warn(`[Chatbot311] Active input slot '${activeInput.name}' on switch #${originNode.id} is disconnected`);
+          break;
+        }
+        
+        const nextLink = app.graph.links[nextLinkId];
+        if (!nextLink) break;
+        
+        originNode = app.graph.getNodeById(nextLink.origin_id);
+        link = nextLink;
+        originSlot = nextLink.origin_slot;
+        console.log(`[Chatbot311] Switch #${link.target_id} resolved to source node #${originNode.id} (${originNode.type})`); // gga-allow
+      } else if (isGetNode) {
+        // Find matching SetNode
+        const nameWidget = originNode.widgets?.[0];
+        const varName = nameWidget ? nameWidget.value : "";
+        if (!varName) {
+          console.warn(`[Chatbot311] GetNode #${originNode.id} has no variable name selected`);
+          break;
+        }
+        
+        console.log(`[Chatbot311] Resolving GetNode #${originNode.id} reading variable: '${varName}'`); // gga-allow
+        
+        const setterNode = app.graph._nodes?.find(otherNode => 
+          otherNode && 
+          (otherNode.type === 'SetNode' || (otherNode.type && otherNode.type.toLowerCase() === 'setnode')) && 
+          otherNode.widgets?.[0]?.value === varName
+        );
+        
+        if (!setterNode) {
+          console.warn(`[Chatbot311] No matching SetNode found for variable '${varName}'`);
+          break;
+        }
+        
+        const nextLinkId = setterNode.inputs?.[0]?.link;
+        if (!nextLinkId) {
+          console.warn(`[Chatbot311] SetNode #${setterNode.id} for variable '${varName}' is disconnected`);
+          break;
+        }
+        
+        const nextLink = app.graph.links[nextLinkId];
+        if (!nextLink) break;
+        
+        originNode = app.graph.getNodeById(nextLink.origin_id);
+        link = nextLink;
+        originSlot = nextLink.origin_slot;
+        console.log(`[Chatbot311] GetNode resolved wirelessly via SetNode #${setterNode.id} to source node #${originNode.id} (${originNode.type})`); // gga-allow
+      } else {
+        break;
+      }
+    }
+    
+    if (!originNode) return null;
+    
+    // Special handling for File Reader 311 / Legacy File Reader nodes to extract text content instead of file path
+    const isFileReader = originNode.type === "FileReader311" || 
+                         originNode.type === "FileReaderNode" || 
+                         (originNode.type && originNode.type.toLowerCase().includes("filereader"));
+                         
+    if (isFileReader) {
+      const getW = (name) => {
+        const w = originNode.widgets?.find(w => w && w.name === name);
+        if (w && w.value !== undefined && w.value !== null) return w.value;
+        const idx = originNode.widgets?.findIndex(w => w && w.name === name);
+        if (idx >= 0 && originNode.widgets_values?.[idx] !== undefined && originNode.widgets_values[idx] !== null) {
+          return originNode.widgets_values[idx];
+        }
+        return "";
+      };
+      
+      const edContent = (originNode.properties?.fr_editor || getW("_editor_content") || "").trim();
+      if (edContent) {
+        console.log(`[Chatbot311] Found editor content for input '${inputName}' from File Reader #${originNode.id} (len: ${edContent.length})`); // gga-allow
+        return edContent;
+      }
+      
+      const cachedContent = (originNode.properties?.fr_cache_content || getW("_cached_content") || "").trim();
+      if (cachedContent) {
+        console.log(`[Chatbot311] Found cached content for input '${inputName}' from File Reader #${originNode.id} (len: ${cachedContent.length})`); // gga-allow
+        return cachedContent;
+      }
+      console.warn(`[Chatbot311] File Reader #${originNode.id} connected to '${inputName}' has no content`);
+    }
+    
+    // Case 1: Check node outputs from the last execution (highly dynamic values)
+    const nodeOutputs = app.node_outputs?.[originNode.id];
+    let val = undefined;
+    
+    if (nodeOutputs) {
+      if (Array.isArray(nodeOutputs)) {
+        val = nodeOutputs[originSlot];
+      } else if (typeof nodeOutputs === "object") {
+        if (nodeOutputs[originSlot] !== undefined) {
+          val = nodeOutputs[originSlot];
+        } else {
+          const slot = originNode.outputs?.[originSlot];
+          if (slot) {
+            const slotName = slot.name;
+            if (slotName && nodeOutputs[slotName] !== undefined) {
+              val = nodeOutputs[slotName];
+            } else if (slotName && nodeOutputs[slotName.toLowerCase()] !== undefined) {
+              val = nodeOutputs[slotName.toLowerCase()];
+            } else if (slotName && nodeOutputs[slotName.toUpperCase()] !== undefined) {
+              val = nodeOutputs[slotName.toUpperCase()];
+            }
+          }
+          if (val === undefined) {
+            const keys = Object.keys(nodeOutputs);
+            if (keys.length === 1) {
+              val = nodeOutputs[keys[0]];
+            } else if (keys.length > 0) {
+              const commonKeys = ["string", "text", "value", "val", "prompt", "output"];
+              for (const k of commonKeys) {
+                if (nodeOutputs[k] !== undefined) {
+                  val = nodeOutputs[k];
+                  break;
+                }
+                const upperK = k.toUpperCase();
+                if (nodeOutputs[upperK] !== undefined) {
+                  val = nodeOutputs[upperK];
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    if (val !== undefined && val !== null) {
+      if (Array.isArray(val) && val.length > 0) {
+        if (typeof val[0] === "string") return val[0];
+        if (val[0] && typeof val[0] === "object") {
+          if (val[0].string !== undefined) return String(val[0].string);
+          if (val[0].text !== undefined) return String(val[0].text);
+        }
+      } else if (typeof val === "string") {
+        return val;
+      } else if (val && typeof val === "object") {
+        if (val.string !== undefined) return String(val.string);
+        if (val.text !== undefined) return String(val.text);
+      }
+    }
+    
+    // Case 2: Check origin node widgets (fallback for primitive/static values)
     if (originNode.widgets && originNode.widgets.length > 0) {
-      const textWidget = originNode.widgets.find(w => w.name === "text" || w.name === "string" || w.name === "value" || w.type === "text" || w.type === "customtext");
+      const textWidget = originNode.widgets.find(w => 
+        w.name === "text" || 
+        w.name === "string" || 
+        w.name === "value" || 
+        w.name === inputName ||
+        (w.name && w.name.toLowerCase() === inputName.toLowerCase()) ||
+        w.type === "text" || 
+        w.type === "customtext"
+      );
       if (textWidget) {
         return String(textWidget.value);
       }
@@ -1189,17 +1701,44 @@ class ChatbotUI {
     }
 
     // Check connected system prompts
-    const sysGeneral = this.getConnectedInputValue("system_general") || this.getConnectedInputValue("system");
-    const sysVariable = this.getConnectedInputValue("system_variable");
-    const badgeSystem = this.container.querySelector("#badge-system");
+    let sysGeneral = this.getConnectedInputValue("system_general");
+    let sysVariable = this.getConnectedInputValue("system_variable");
+    let projContext = this.getConnectedInputValue("project_context");
     
-    if (sysGeneral !== null || sysVariable !== null) {
+    console.log(`[Chatbot311] checkConnections parsed: sysGeneral len = ${sysGeneral ? sysGeneral.length : 'null'}, sysVariable len = ${sysVariable ? sysVariable.length : 'null'}, projContext len = ${projContext ? projContext.length : 'null'}`); // gga-allow
+    
+    const isValidPromptContent = (val) => {
+      if (!val || typeof val !== "string") return false;
+      const trimmed = val.trim();
+      if (!trimmed) return false;
+      if (/^\d+$/.test(trimmed)) return false; // purely a number (like switch index)
+      if (trimmed.length < 250 && !trimmed.includes("\n")) {
+        if (/[a-zA-Z]:\\|\.md$|\.txt$|\.json$/i.test(trimmed)) return false; // file path or file name
+      }
+      return true;
+    };
+
+    if (!isValidPromptContent(sysGeneral) && this.connectedSystemGeneral) {
+      sysGeneral = this.connectedSystemGeneral;
+    }
+    if (!isValidPromptContent(sysVariable) && this.connectedSystemVariable) {
+      sysVariable = this.connectedSystemVariable;
+    }
+    if (!isValidPromptContent(projContext) && this.connectedProjectContext) {
+      projContext = this.connectedProjectContext;
+    }
+    
+    const badgeSystem = this.container.querySelector("#badge-system");
+    const hasAnyContent = (sysGeneral && sysGeneral.trim()) || (sysVariable && sysVariable.trim()) || (projContext && projContext.trim());
+    
+    if (hasAnyContent) {
       const parts = [];
-      if (sysGeneral !== null) parts.push(`General: "${sysGeneral.slice(0, 50)}..."`);
-      if (sysVariable !== null) parts.push(`Variable: "${sysVariable.slice(0, 50)}..."`);
-      const tooltip = "Connected system prompt(s):\n" + parts.join("\n");
+      if (sysGeneral && sysGeneral.trim()) parts.push(`General: "${sysGeneral.trim().slice(0, 50)}..."`);
+      if (sysVariable && sysVariable.trim()) parts.push(`Variable: "${sysVariable.trim().slice(0, 50)}..."`);
+      if (projContext && projContext.trim()) parts.push(`Context: "${projContext.trim().slice(0, 50)}..."`);
+      const tooltip = "Connected system prompt/context(s):\n" + parts.join("\n");
       
-      const newSystemKey = (sysGeneral || "") + "|||" + (sysVariable || "");
+      const newSystemKey = (sysGeneral || "") + "|||" + (sysVariable || "") + "|||" + (projContext || "");
       if (this.connectedSystemPrompt !== newSystemKey) {
         this.connectedSystemPrompt = newSystemKey;
         badgeSystem.style.display = "inline-block";
@@ -1280,11 +1819,57 @@ class ChatbotUI {
     }
   }
   
+  updateModelBadge(modelName) {
+    const badge = this.container.querySelector("#model-badge");
+    if (!badge) return;
+    
+    let friendlyName = "Gemini 3.8";
+    if (modelName) {
+      const lower = modelName.toLowerCase();
+      if (lower.includes("gemini-3.8-flash") || lower.includes("gemini-3-8-flash")) {
+        friendlyName = "Gemini 3.8 Flash";
+      } else if (lower.includes("gemini-3.7-flash") || lower.includes("gemini-3-7-flash")) {
+        friendlyName = "Gemini 3.7 Flash";
+      } else if (lower.includes("gemini-3.6-flash") || lower.includes("gemini-3-6-flash")) {
+        friendlyName = "Gemini 3.6 Flash";
+      } else if (lower.includes("gemini-3.5-flash-lite") || lower.includes("gemini-3-5-flash-lite")) {
+        friendlyName = "Gemini 3.5 Flash Lite";
+      } else if (lower.includes("gemini-3.5-flash") || lower.includes("gemini-3-5-flash")) {
+        friendlyName = "Gemini 3.5 Flash";
+      } else if (lower.includes("gemini-3.1-flash-lite") || lower.includes("gemini-3-1-flash-lite")) {
+        friendlyName = "Gemini 3.1 Flash Lite";
+      } else if (lower.includes("gemini-3.1-pro")) {
+        friendlyName = "Gemini 3.1 Pro";
+      } else if (lower.includes("gemini-2.5-flash")) {
+        friendlyName = "Gemini 2.5 Flash";
+      } else if (lower.includes("gemini-2.5-pro")) {
+        friendlyName = "Gemini 2.5 Pro";
+      } else {
+        friendlyName = modelName
+          .replace(/-/g, " ")
+          .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+        if (!friendlyName.startsWith("Gemini")) {
+          friendlyName = "Gemini " + friendlyName;
+        }
+      }
+    }
+    badge.textContent = friendlyName;
+    if (this.config) {
+      this.config.lastUsedModel = modelName;
+    }
+    this.lastUsedModel = modelName;
+  }
+  
   setValue(val) {
     if (!val) return;
+    // Assigning widget.value always invokes this setter. Rebuilding the
+    // message list here wipes innerHTML (black flash) and smooth-scrolls.
+    if (this._suppressSetValueRender) return;
     let history = [];
     let config = {};
     let draft = "";
+    const prevHistory = this.history;
+    const prevChatId = this.currentChatId;
     
     try {
       const parsed = typeof val === "string" ? JSON.parse(val) : val;
@@ -1307,17 +1892,36 @@ class ChatbotUI {
       console.error("Error setting widget value:", e);
     }
     
+    const historyChanged = history !== prevHistory && (
+      !prevHistory ||
+      history.length !== prevHistory.length ||
+      (history.length > 0 && prevHistory.length > 0 && (
+        history[history.length - 1]?.role !== prevHistory[prevHistory.length - 1]?.role ||
+        history[history.length - 1]?.content !== prevHistory[prevHistory.length - 1]?.content
+      ))
+    );
+    const chatIdChanged = this.currentChatId !== prevChatId;
+
     this.history = history;
     this.config = config;
-    if (this.textarea) {
+    if (this.config && this.config.lastUsedModel) {
+      this.updateModelBadge(this.config.lastUsedModel);
+    } else {
+      this.updateModelBadge("gemini-3.8-flash");
+    }
+    if (this.textarea && document.activeElement !== this.textarea) {
       this.textarea.value = draft;
       this.textarea.style.height = "auto";
       if (draft) {
         this.textarea.style.height = (this.textarea.scrollHeight) + "px";
       }
     }
-    this.renderMessages();
-    this.fetchConversations();
+    if (historyChanged || this.messagesContainer.childElementCount === 0) {
+      this.renderMessages();
+    }
+    if (chatIdChanged) {
+      this.fetchConversations();
+    }
   }
   
   renderMessages() {
@@ -1337,10 +1941,46 @@ class ChatbotUI {
       this.messagesContainer.appendChild(bubble);
     });
     
+    this.renderMermaidDiagrams();
+    
     if (this.searchBar && this.searchBar.style.display !== "none" && this.searchInput && this.searchInput.value) {
       this.performSearch(this.searchInput.value, false);
     } else {
       this.scrollBottom();
+    }
+  }
+
+  async renderMermaidDiagrams() {
+    const containers = this.messagesContainer.querySelectorAll(".chatbot311-mermaid-container");
+    if (containers.length === 0) return;
+    
+    const mermaid = await initMermaid();
+    if (!mermaid) {
+      containers.forEach(c => {
+        const preview = c.querySelector(".mermaid-preview");
+        if (preview) preview.textContent = "Failed to load Mermaid rendering engine.";
+      });
+      return;
+    }
+    
+    for (let i = 0; i < containers.length; i++) {
+      const container = containers[i];
+      const rawEl = container.querySelector(".mermaid-raw");
+      const previewEl = container.querySelector(".mermaid-preview");
+      if (rawEl && previewEl && !container.classList.contains("rendered")) {
+        const rawCode = rawEl.textContent.trim();
+        const uniqueId = `mermaid_diag_${Math.random().toString(36).substring(2, 9)}_${i}`;
+        try {
+          const { svg } = await mermaid.render(uniqueId, rawCode);
+          previewEl.innerHTML = svg;
+          container.classList.add("rendered");
+        } catch (err) {
+          console.error("Error rendering Mermaid diagram:", err);
+          previewEl.innerHTML = `<div class="mermaid-error">Error rendering diagram. Raw code:</div><pre style="margin:4px 0 0 0; font-size:10px; opacity:0.7;"><code>${rawCode}</code></pre>`;
+          const badSvg = document.getElementById(uniqueId);
+          if (badSvg) badSvg.remove();
+        }
+      }
     }
   }
   
@@ -1364,6 +2004,21 @@ class ChatbotUI {
       });
     } else {
       text = content || "";
+    }
+    
+    // Format assistant execution/API errors into user-friendly warnings
+    if (role === "assistant" && typeof text === "string" && text.includes("Error") && !text.startsWith("⚠️")) {
+      if (text.includes("API key not valid") || text.includes("valid API key")) {
+        text = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node.";
+      } else if (text.includes("prepayment") || text.includes("credits") || text.includes("billing") || text.includes("depleted")) {
+        text = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in [Google AI Studio](https://aistudio.google.com/).";
+      } else if (text.includes("rate_limited") || text.includes("429") || text.toLowerCase().includes("quota")) {
+        text = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
+      } else if (text.includes("503") || text.toLowerCase().includes("unavailable")) {
+        text = "⚠️ **Gemini Service Unavailable (503):** The Gemini API is currently overloaded or undergoing maintenance. Please wait a moment and try again.";
+      } else {
+        text = `⚠️ **Execution Error:** ${text.replace(/^Execution Error:\s*/i, "")}`;
+      }
     }
     
     if (images.length > 0) {
@@ -1519,11 +2174,11 @@ class ChatbotUI {
       let startD = "<prompt_1>";
       let endD = "</prompt_1>";
       if (count >= 1) {
-        const startW = this.node.widgets?.find(w => w && w.name === "starting_delimiter_1");
-        const endW = this.node.widgets?.find(w => w && w.name === "ending_delimiter_1");
-        if (startW && endW) {
-          startD = startW.value;
-          endD = endW.value;
+        const delimW = this.node.widgets?.find(w => w && w.name === "delimiter_1");
+        if (delimW) {
+          const { start, end } = deriveDelimiterTags(delimW.value, 1);
+          startD = start;
+          endD = end;
         }
       }
       const wrappedText = `${startD}\n${text}\n${endD}`;
@@ -1545,20 +2200,45 @@ class ChatbotUI {
     this.isGenerating = true;
     this.setSendButtonState(true);
     
-    let content = text;
-    if (allAttachments.length > 0) {
-      content = [];
-      content.push({ type: "text", text: text || "Analyze these images." });
-      allAttachments.forEach(att => {
-        content.push({
-          type: "image_url",
-          image_url: { url: att.base64 }
-        });
-      });
+    let mergedIntoLastMsg = false;
+    if (this.history.length > 0) {
+      const lastMsg = this.history[this.history.length - 1];
+      if (lastMsg.role === "user" && Array.isArray(lastMsg.content)) {
+        const hasImages = lastMsg.content.some(part => part.type === "image_url");
+        const textPartIdx = lastMsg.content.findIndex(part => part.type === "text");
+        
+        if (hasImages && textPartIdx === -1) {
+          // No text part exists, prepend the typed text
+          lastMsg.content.unshift({ type: "text", text: text || "Analyze these images." });
+          mergedIntoLastMsg = true;
+        } else if (hasImages && textPartIdx !== -1) {
+          const currentText = lastMsg.content[textPartIdx].text || "";
+          if (!currentText.trim() || currentText === "Analyze these images.") {
+            lastMsg.content[textPartIdx].text = text || "Analyze these images.";
+            mergedIntoLastMsg = true;
+          }
+        }
+      }
     }
     
-    this.history.push({ role: "user", content });
-    this.renderMessages();
+    if (mergedIntoLastMsg) {
+      this.renderMessages();
+    } else {
+      let content = text;
+      if (allAttachments.length > 0) {
+        content = [];
+        content.push({ type: "text", text: text || "Analyze these images." });
+        allAttachments.forEach(att => {
+          content.push({
+            type: "image_url",
+            image_url: { url: att.base64 }
+          });
+        });
+      }
+      
+      this.history.push({ role: "user", content });
+      this.renderMessages();
+    }
     
     this.textarea.value = "";
     this.textarea.style.height = "auto";
@@ -1574,29 +2254,62 @@ class ChatbotUI {
     
     // Build messages payload for API (connected system prompt vs default system prompt)
     const apiMessages = [];
-    let activeSystemPrompt = this.connectedSystemPrompt || this.defaultSystemPrompt;
+    let activeSystemPrompt = this.defaultSystemPrompt;
+    if (this.connectedSystemPrompt) {
+      const parts = this.connectedSystemPrompt.split("|||");
+      const sysGeneralVal = parts[0] ? parts[0].trim() : "";
+      const sysVariableVal = parts[1] ? parts[1].trim() : "";
+      const projContextVal = parts[2] ? parts[2].trim() : "";
+      
+      const systemParts = [];
+      if (sysGeneralVal) {
+        systemParts.push(sysGeneralVal);
+      } else if (this.defaultSystemPrompt && this.defaultSystemPrompt.trim()) {
+        systemParts.push(this.defaultSystemPrompt.trim());
+      }
+      if (sysVariableVal) {
+        systemParts.push(sysVariableVal);
+      }
+      if (projContextVal) {
+        systemParts.push(
+          "### ACTIVE PROJECT CONTEXT (USER DATA)\n" +
+          "The following project context, pre-production notes, show bible, character descriptions, or previous planning work has been supplied by the user. You MUST read this data carefully, respect all names/facts/parameters declared within it, and adapt your cinematic planning around it:\n" +
+          "```\n" +
+          projContextVal +
+          "\n```"
+        );
+      }
+      if (systemParts.length > 0) {
+        activeSystemPrompt = systemParts.join("\n\n");
+      }
+    }
 
     // Read active delimiters from node widgets to inject into Gemini system instructions
     const delimitersInfo = [];
     const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
     const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
     for (let i = 1; i <= count; i++) {
-      const startW = this.node.widgets?.find(w => w && w.name === `starting_delimiter_${i}`);
-      const endW = this.node.widgets?.find(w => w && w.name === `ending_delimiter_${i}`);
-      if (startW && endW) {
+      const delimW = this.node.widgets?.find(w => w && w.name === `delimiter_${i}`);
+      if (delimW) {
+        const { start, end } = deriveDelimiterTags(delimW.value, i);
         delimitersInfo.push({
           index: i,
-          start: startW.value,
-          end: endW.value
+          start: start,
+          end: end
         });
       }
     }
 
     if (delimitersInfo.length > 0) {
+      let variationInstruction = "";
+      if (delimitersInfo.length > 1) {
+        variationInstruction = "\n- **Multiple Variations**: Since you have multiple active delimiters, you MUST generate a slightly different variation or alternative version of the prompt/output for each active delimiter. Do not repeat the same content; customize each variation slightly while remaining true to the user's intent.";
+      }
       activeSystemPrompt = (activeSystemPrompt || "").trim() + 
         "\n\n### IMPORTANT: ACTIVE OUTPUT DELIMITERS\n" +
         "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST enclose the final clean copy-pasteable output at the very end of your response using these exact delimiters (without markdown code blocks around the delimiters themselves):\n" +
         delimitersInfo.map(d => `- Delimiter ${d.index}: Wrap the final output between '${d.start}' and '${d.end}'`).join("\n") +
+        variationInstruction +
         "\n\nExample of final output format:\n" +
         `${delimitersInfo[0].start}\n(Your generated prompt/output here)\n${delimitersInfo[0].end}`;
     }
@@ -1667,6 +2380,12 @@ class ChatbotUI {
     try {
       const apiKeyWidget = this.node.widgets?.find(w => w && w.name === "api_key");
       let apiKey = apiKeyWidget ? String(apiKeyWidget.value || "").trim() : "";
+      if (!apiKey) {
+        apiKey = String(this.getConnectedInputValue("api_key") || "").trim();
+      }
+      if (!apiKey && this.connectedApiKey) {
+        apiKey = this.connectedApiKey;
+      }
       if (apiKey && (
         apiKey.toLowerCase() === "your_api_key_here" || 
         apiKey.toLowerCase().includes("optional") || 
@@ -1677,14 +2396,68 @@ class ChatbotUI {
         apiKey = "";
       }
       const headers = { "Content-Type": "application/json" };
+      headers["X-Chatbot-Node-Id"] = this.node.id.toString();
       if (apiKey) {
-        headers["X-Gemini-API-Key"] = apiKey;
+        headers["X-Gemini-API-Key"] = sanitizeHeaderValue(apiKey);
+      }
+      
+      const useCreditsWidget = this.node.widgets?.find(w => w && w.name === "use_comfyui_credits");
+      const useCredits = useCreditsWidget ? !!useCreditsWidget.value : false;
+      if (useCredits) {
+        headers["X-Use-ComfyUI-Credits"] = "true";
+      }
+      
+      let authToken = "";
+      const authWidget = this.node.widgets?.find(w => w && w.name === "auth_token_comfy_org");
+      if (authWidget && authWidget.value) {
+        authToken = String(authWidget.value).trim();
+      }
+      // Primary fallback: use the same properties ComfyUI frontend uses in queuePrompt
+      if (!authToken && api.authToken) {
+        authToken = api.authToken;
+      }
+      if (!authToken && api.apiKey) {
+        authToken = api.apiKey;
+      }
+      if (!authToken) {
+        try {
+          const authStore = await api.getAuthStore?.();
+          if (authStore) {
+            if (typeof authStore.getAuthToken === "function") {
+              authToken = await authStore.getAuthToken();
+            } else if (typeof authStore.getIdToken === "function") {
+              authToken = await authStore.getIdToken();
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to get auth token from ComfyUI auth store:", err);
+        }
+      }
+      if (!authToken) {
+        try {
+          authToken = localStorage.getItem("comfy_org_token") || localStorage.getItem("comfy_api_key") || "";
+        } catch (e) {}
+      }
+      if (!authToken) {
+        authToken = await getFirebaseIndexedDBToken() || "";
+      }
+      authToken = (authToken || "").trim();
+      if (authToken) {
+        headers["X-Comfy-Org-Auth-Token"] = sanitizeHeaderValue(authToken);
+      }
+      
+      const modelWidget = this.node.widgets?.find(w => w && w.name === "model_name");
+      const activeModel = modelWidget ? modelWidget.value : this.lastUsedModel;
+      if (activeModel) {
+        this.lastUsedModel = activeModel;
+        this.updateModelBadge(activeModel);
       }
       
       const response = await fetch("/chatbot-311/proxy/gemini/v1/chat/completions", {
         method: "POST",
         headers: headers,
         body: JSON.stringify({
+          model: activeModel,
           messages: apiMessages,
           stream: true
         })
@@ -1724,9 +2497,10 @@ class ChatbotUI {
           }
         }
         
-        // Add custom friendly warnings for common API failures
         if (errMessage.includes("API key not valid") || errMessage.includes("valid API key")) {
-          errMessage = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node or in the `.env` file inside the `ComfyUI-311-Chatbot` directory.";
+          errMessage = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node.";
+        } else if (errMessage.includes("prepayment") || errMessage.includes("credits") || errMessage.includes("billing") || errMessage.includes("depleted")) {
+          errMessage = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in Google AI Studio.";
         } else if (errMessage.includes("rate_limited") || errMessage.includes("429")) {
           errMessage = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again.";
         }
@@ -1764,6 +2538,10 @@ class ChatbotUI {
               accumulated += delta;
               textSpan.innerHTML = parseMarkdown(accumulated, this.getDelimiters());
               this.scrollBottom();
+              
+              if (parsed.model) {
+                this.updateModelBadge(parsed.model);
+              }
             } catch (e) {
               // Suppress partial chunk errors
             }
@@ -1776,6 +2554,8 @@ class ChatbotUI {
       
       // Save full conversation with assistant response
       await this.saveActiveConversation();
+      
+      this.renderMermaidDiagrams();
       
     } catch (e) {
       console.error(e);
@@ -1797,34 +2577,72 @@ class ChatbotUI {
     if (!this.undoStack) this.undoStack = [];
     this.undoStack.push(JSON.stringify({
       history: this.history,
-      draft: this.textarea ? this.textarea.value : ""
+      draft: this.textarea ? this.textarea.value : "",
+      chatName: this.chatName,
+      currentChatId: this.currentChatId
     }));
     if (this.undoStack.length > 10) this.undoStack.shift();
     this.updateUndoButtonVisibility();
   }
 
-  undoLastAction() {
+  async undoLastAction() {
     if (!this.undoStack || this.undoStack.length === 0) return;
     const previousState = this.undoStack.pop();
     try {
       const state = JSON.parse(previousState);
-      if (state && typeof state === "object" && "history" in state) {
+      if (state && typeof state === "object" && state.type === "deleted_sidebar_chat") {
+        // Restore deleted sidebar conversation
+        const conv = state.conversation;
+        const response = await fetch("/chatbot-311/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: conv.id,
+            name: conv.name,
+            history: conv.history,
+            model: conv.model || conv.config?.lastUsedModel || "gemini-3.8-flash"
+          })
+        });
+        if (response.ok) {
+          // If it was the active one when deleted, switch back to it
+          if (conv.id === this.currentChatId || this.history.length === 0) {
+            this.currentChatId = conv.id;
+            this.chatName = conv.name;
+            this.history = conv.history;
+            if (conv.model) {
+              this.updateModelBadge(conv.model);
+            }
+            this.renderMessages();
+            this.updateNodeValue();
+          }
+          this.fetchConversations();
+        }
+      } else if (state && typeof state === "object" && "history" in state) {
         this.history = state.history;
         if (this.textarea) {
           this.textarea.value = state.draft || "";
           this.textarea.style.height = "auto";
           this.textarea.style.height = (this.textarea.scrollHeight) + "px";
         }
+        if (state.chatName !== undefined) {
+          this.chatName = state.chatName;
+        }
+        if (state.currentChatId !== undefined) {
+          this.currentChatId = state.currentChatId;
+        }
+        this.renderMessages();
+        this.updateNodeValue();
+        await this.saveActiveConversation();
       } else {
         // Fallback for legacy stringified history states
         this.history = state;
+        this.renderMessages();
+        this.updateNodeValue();
+        await this.saveActiveConversation();
       }
     } catch (e) {
       console.error("Failed to parse undo state:", e);
     }
-    this.renderMessages();
-    this.updateNodeValue();
-    this.saveActiveConversation();
     this.updateUndoButtonVisibility();
   }
 
@@ -1875,9 +2693,8 @@ class ChatbotUI {
     this.triggerUndoHint();
   }
   
-  clearChat() {
+  async clearChat() {
     if (this.history.length === 0) return;
-    if (!confirm("Are you sure you want to clear this conversation?")) return;
     
     this.saveUndoState();
     this.history = [];
@@ -1887,19 +2704,43 @@ class ChatbotUI {
     // Delete file from disk if it was saved
     fetch(`/chatbot-311/conversations/${this.currentChatId}`, { method: "DELETE" })
       .then(() => this.fetchConversations());
+    this.triggerUndoHint();
   }
   
-  updateNodeValue(skipTrigger = false) {
-    const val = JSON.stringify({
+  buildWidgetPayload() {
+    if (this.config) {
+      this.config.lastUsedModel = this.lastUsedModel;
+    }
+    // Live textarea is the only source of truth for draft.
+    return {
       config: this.config,
       history: this.history,
       currentChatId: this.currentChatId,
       chatName: this.chatName,
+      node_id: this.node?.id,
       draft: this.textarea ? this.textarea.value : ""
-    });
-    const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets[0];
+    };
+  }
+
+  updateNodeValue(skipTrigger = true) {
+    const val = this.buildWidgetPayload();
+    const widget = (this.node.widgets || []).find(w => w.name === "ui_widget") || this.node.widgets?.[0];
     if (widget) {
-      widget.value = val;
+      const prev = this._lastSyncedPayload;
+      if (prev &&
+          prev.draft === val.draft &&
+          prev.history === val.history &&
+          prev.currentChatId === val.currentChatId) {
+        return;
+      }
+      // DOMWidget setter calls options.setValue → must not rebuild the chat.
+      this._suppressSetValueRender = true;
+      try {
+        widget.value = val;
+        this._lastSyncedPayload = val;
+      } finally {
+        this._suppressSetValueRender = false;
+      }
     }
     if (!skipTrigger) {
       this.node.trigger("change");
@@ -1911,12 +2752,12 @@ class ChatbotUI {
     const numDelimWidget = this.node.widgets?.find(w => w && w.name === "number_of_delimiters");
     const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
     for (let i = 1; i <= count; i++) {
-      const startW = this.node.widgets?.find(w => w && w.name === `starting_delimiter_${i}`);
-      const endW = this.node.widgets?.find(w => w && w.name === `ending_delimiter_${i}`);
-      if (startW && endW) {
+      const delimW = this.node.widgets?.find(w => w && w.name === `delimiter_${i}`);
+      if (delimW) {
+        const { start, end } = deriveDelimiterTags(delimW.value, i);
         delimiters.push({
-          start: startW.value,
-          end: endW.value
+          start: start,
+          end: end
         });
       }
     }
@@ -2241,6 +3082,27 @@ class ChatbotUI {
 
 app.registerExtension({
   name: "Chatbot311.Extension",
+
+  async setup() {
+    // Belt-and-suspenders: flush live draft into widget.value before any Queue.
+    if (app._chatbot311QueuePatched) return;
+    app._chatbot311QueuePatched = true;
+    const originalQueuePrompt = app.queuePrompt;
+    if (typeof originalQueuePrompt !== "function") return;
+    app.queuePrompt = async function (...args) {
+      try {
+        const nodes = app.graph?._nodes || [];
+        for (const n of nodes) {
+          if (n?.chatbotUI?.updateNodeValue) {
+            n.chatbotUI.updateNodeValue(true);
+          }
+        }
+      } catch (e) {
+        console.warn("[Chatbot311] Failed to sync draft before queue:", e);
+      }
+      return originalQueuePrompt.apply(this, args);
+    };
+  },
   
   getCustomWidgets() {
     return {
@@ -2254,25 +3116,24 @@ app.registerExtension({
         // reading getMinHeight/getMaxHeight from widget options.
         // No manual computeSize overrides needed.
         
-        const widget = node.addDOMWidget(inputName, "CHAT_311", element, {
+        let widget;
+        widget = node.addDOMWidget(inputName, "CHAT_311", element, {
           hideOnZoom: false,
           getMinHeight() {
             return 250;
           },
           getValue() {
-            return {
-              config: chatbot.config,
-              history: chatbot.history,
-              currentChatId: chatbot.currentChatId,
-              chatName: chatbot.chatName,
-              node_id: node.id,
-              draft: chatbot.textarea ? chatbot.textarea.value : ""
-            };
+            // Live textarea is source of truth. Do NOT assign widget.value here:
+            // the DOMWidget setter calls setValue → renderMessages (black flash).
+            return chatbot.buildWidgetPayload();
           },
           setValue(val) {
             chatbot.setValue(val);
           },
           getState() {
+            if (chatbot.config) {
+              chatbot.config.lastUsedModel = chatbot.lastUsedModel;
+            }
             return {
               config: chatbot.config,
               history: chatbot.history,
@@ -2281,6 +3142,18 @@ app.registerExtension({
             };
           }
         });
+
+        // Prefer serializeValue when ComfyUI uses it (skips stale widget.value).
+        widget.serializeValue = async () => {
+          const val = chatbot.buildWidgetPayload();
+          chatbot._suppressSetValueRender = true;
+          try {
+            widget.value = val;
+          } finally {
+            chatbot._suppressSetValueRender = false;
+          }
+          return val;
+        };
         
         // No widget.computeSize or widget.draw overrides.
         // ComfyUI V2 uses computeLayoutSize with getMinHeight from widget options.
@@ -2289,38 +3162,59 @@ app.registerExtension({
         node.chatbotWidget = widget;
         node.chatbotUI = chatbot;
         
-        // Force DOM widget wrapper to fill node width (ComfyUI V2 fix)
-        const syncWidgetWidth = () => {
-          const targetWidth = (node.size ? node.size[0] - 30 : 350);
-          if (widget.element) {
-            widget.element.style.width = "100%";
-            if (widget.element.parentElement) {
-              widget.element.parentElement.style.width = targetWidth + "px";
-            }
-          }
-          widget.width = targetWidth;
-        };
-        syncWidgetWidth();
+        let sizeObserver = null;
+        let lastNodeWidth = 0;
+        let lastNodeHeight = 0;
 
-        // Setup MutationObserver to prevent ComfyUI from overriding the width on click/focus
-        let widthObserver = null;
-        if (typeof MutationObserver !== "undefined") {
-          setTimeout(() => {
-            if (widget.element && widget.element.parentElement) {
-              const parent = widget.element.parentElement;
-              const targetWidth = (widget.width || (node.size ? node.size[0] - 30 : 350)) + "px";
-              parent.style.width = targetWidth;
-              
-              widthObserver = new MutationObserver(() => {
-                const currentTargetWidth = (widget.width || (node.size ? node.size[0] - 30 : 350)) + "px";
-                if (parent.style.width !== currentTargetWidth) {
-                  parent.style.width = currentTargetWidth;
+        node.syncWidgetSize = (size) => {
+          const actualSize = size || node.size;
+          if (!actualSize) return;
+
+          if (widget.element && widget.element.parentElement) {
+            const parent = widget.element.parentElement;
+            
+            // Register MutationObserver once parent is available
+            if (!sizeObserver && typeof MutationObserver !== "undefined") {
+              sizeObserver = new MutationObserver(() => {
+                // Only restore when LiteGraph collapses the overlay (click/focus).
+                // Re-running on every style.top/transform write causes a 1px jump.
+                const host = widget.element?.parentElement;
+                if (host && host.offsetWidth > 0 && host.offsetWidth < 80) {
+                  node.syncWidgetSize();
                 }
               });
-              widthObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
+              sizeObserver.observe(parent, { attributes: true, attributeFilter: ["style"] });
             }
-          }, 100);
-        }
+            
+            const targetWidth = actualSize[0] - 20;
+            const topOffset = parseFloat(parent.style.top) || 260;
+            const targetHeight = Math.max(250, actualSize[1] - topOffset - 16);
+            
+            // Only update DOM styles if node size or widget width differs
+            if (actualSize[0] !== lastNodeWidth || actualSize[1] !== lastNodeHeight || parent.style.width !== targetWidth + "px") {
+              lastNodeWidth = actualSize[0];
+              lastNodeHeight = actualSize[1];
+              
+              try { widget.width = targetWidth; } catch (_) {}
+              try { widget.height = targetHeight; } catch (_) {}
+              
+              parent.style.setProperty("width", targetWidth + "px", "important");
+              parent.style.setProperty("max-width", "none", "important");
+              parent.style.setProperty("margin", "0px", "important");
+              parent.style.setProperty("padding", "0px", "important");
+              parent.style.setProperty("box-sizing", "border-box", "important");
+              
+              widget.element.style.setProperty("width", "100%", "important");
+              widget.element.style.setProperty("max-width", "none", "important");
+              widget.element.style.setProperty("margin", "0px", "important");
+              widget.element.style.setProperty("box-sizing", "border-box", "important");
+              
+              parent.style.setProperty("height", targetHeight + "px", "important");
+              widget.element.style.height = "100%";
+            }
+          }
+        };
+        node.syncWidgetSize();
         
         if (!node.size || node.size[0] < 200 || node.size[1] < 200) {
           node.size = [380, 580];
@@ -2331,8 +3225,8 @@ app.registerExtension({
         
         const onRemoved = node.onRemoved;
         node.onRemoved = function() {
-          if (widthObserver) {
-            widthObserver.disconnect();
+          if (sizeObserver) {
+            sizeObserver.disconnect();
           }
           if (chatbot) chatbot.destroy();
           if (onRemoved) onRemoved.apply(this, arguments);
@@ -2372,37 +3266,56 @@ app.registerExtension({
         };
         
         node.onResize = function(size) {
-          // Sync chatbot container width to node width (ComfyUI V2 fix)
-          if (node.chatbotWidget) {
-            const targetWidth = size[0] - 30;
-            node.chatbotWidget.width = targetWidth;
-            if (node.chatbotWidget.element) {
-              node.chatbotWidget.element.style.width = "100%";
-              if (node.chatbotWidget.element.parentElement) {
-                node.chatbotWidget.element.parentElement.style.width = targetWidth + "px";
-              }
-            }
+          if (node.syncWidgetSize) {
+            node.syncWidgetSize();
           }
-          // Let ComfyUI V2 handle layout. Just redraw.
-          if (node.graph) {
-            node.graph.setDirtyCanvas(true, true);
+        };
+        
+        const originalOnWidgetChanged = node.onWidgetChanged;
+        node.onWidgetChanged = function(name, value, oldValue) {
+          const res = originalOnWidgetChanged ? originalOnWidgetChanged.apply(this, arguments) : undefined;
+          // ui_widget updates (typing draft / clear / history sync) must NOT
+          // rebuild outputs or re-render chat — that causes black flash,
+          // scroll jumps, and raced graphToPrompt after trash.
+          const layoutNames = new Set(["mode", "sound_alert", "number_of_delimiters", "use_comfyui_credits"]);
+          const isDelim = typeof name === "string" && name.startsWith("delimiter_");
+          if (layoutNames.has(name) || isDelim) {
+            updateNodeLayout();
           }
+          return res;
         };
         
         const updateDelimiterOutputs = (count) => {
           if (!node.outputs) return;
           const maxDelims = 20;
-          for (let i = 1; i <= maxDelims; i++) {
-            const outputName = `Delimiter_${i}`;
-            const idx = node.outputs.findIndex(o => o.name === outputName);
-            if (i <= count) {
-              if (idx === -1) {
-                node.addOutput(outputName, "STRING");
+          
+          const currentOutputsCount = node.outputs.length;
+          const targetOutputsCount = 5 + count;
+          
+          if (currentOutputsCount < targetOutputsCount) {
+            const startAddIdx = Math.max(1, currentOutputsCount - 5 + 1);
+            for (let i = startAddIdx; i <= count; i++) {
+              const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
+              const label = delimW && delimW.value ? String(delimW.value).trim() : `Delimiter_${i}`;
+              node.addOutput(label || `Delimiter_${i}`, "STRING");
+            }
+          } else if (currentOutputsCount > targetOutputsCount) {
+            for (let i = currentOutputsCount - 1; i >= targetOutputsCount; i--) {
+              node.removeOutput(i);
+            }
+          }
+          
+          // Rename output slots based on active delimiter widget values
+          for (let i = 1; i <= count; i++) {
+            const slotIdx = 4 + i;
+            if (node.outputs[slotIdx]) {
+              const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
+              const label = delimW && delimW.value ? String(delimW.value).trim() : `Delimiter_${i}`;
+              if (node.outputs[slotIdx].name !== label) {
+                node.outputs[slotIdx].name = label || `Delimiter_${i}`;
               }
-            } else {
-              if (idx !== -1) {
-                node.removeOutput(idx);
-              }
+              // Force update display label in ComfyUI canvas node
+              node.outputs[slotIdx].label = label || `Delimiter_${i}`;
             }
           }
         };
@@ -2436,44 +3349,24 @@ app.registerExtension({
           // 2. Delimiter widgets visibility
           const count = numDelimWidget ? (parseInt(numDelimWidget.value) || 0) : 0;
           for (let i = 1; i <= 20; i++) {
-            const startW = node.widgets?.find(w => w.name === `starting_delimiter_${i}`);
-            const endW = node.widgets?.find(w => w.name === `ending_delimiter_${i}`);
+            const delimW = node.widgets?.find(w => w.name === `delimiter_${i}`);
             
-            if (startW) {
-              if (startW.type === "converted-widget") {
-                startW.type = startW.original_type || "STRING";
+            if (delimW) {
+              if (delimW.type === "converted-widget") {
+                delimW.type = delimW.original_type || "STRING";
               }
               if (i <= count) {
-                if (startW.element) {
-                  startW.element.style.display = "";
+                if (delimW.element) {
+                  delimW.element.style.display = "";
                 }
-                delete startW.computeSize;
-                delete startW.draw;
+                delete delimW.computeSize;
+                delete delimW.draw;
               } else {
-                if (startW.element) {
-                  startW.element.style.display = "none";
+                if (delimW.element) {
+                  delimW.element.style.display = "none";
                 }
-                startW.computeSize = () => [0, -4];
-                startW.draw = function() {};
-              }
-            }
-            
-            if (endW) {
-              if (endW.type === "converted-widget") {
-                endW.type = endW.original_type || "STRING";
-              }
-              if (i <= count) {
-                if (endW.element) {
-                  endW.element.style.display = "";
-                }
-                delete endW.computeSize;
-                delete endW.draw;
-              } else {
-                if (endW.element) {
-                  endW.element.style.display = "none";
-                }
-                endW.computeSize = () => [0, -4];
-                endW.draw = function() {};
+                delimW.computeSize = () => [0, -4];
+                delimW.draw = function() {};
               }
             }
           }
@@ -2512,6 +3405,18 @@ app.registerExtension({
             };
           }
           
+          for (let i = 1; i <= 20; i++) {
+            const delimW = node.widgets?.find(w => w && w.name === `delimiter_${i}`);
+            if (delimW) {
+              const originalCallback = delimW.callback;
+              delimW.callback = function() {
+                const res = originalCallback ? originalCallback.apply(this, arguments) : undefined;
+                updateNodeLayout();
+                return res;
+              };
+            }
+          }
+          
           const apiKeyWidget = node.widgets?.find(w => w && w.name === "api_key");
           if (apiKeyWidget) {
             const originalCallback = apiKeyWidget.callback;
@@ -2526,138 +3431,106 @@ app.registerExtension({
           
           updateNodeLayout();
 
+          // Set defaults for seed and control_after_generate on creation
+          const seedW = node.widgets?.find(w => w && w.name === "seed");
+          const controlW = node.widgets?.find(w => w && (w.name === "control_after_generate" || w.name === "control after generate"));
+          if (controlW && (controlW.value === undefined || controlW.value === "fixed")) {
+            controlW.value = "increment";
+          }
+          if (seedW && seedW.value === undefined) {
+            seedW.value = 0;
+          }
+
           // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
           if (node.size && node.size[1] > 3000) {
             node.setSize([380, 580]);
           }
         }, 100);
         
+        node.onSerialize = function(data) {
+          if (node.widgets) {
+            data.widgets_values_by_name = {};
+            for (const w of node.widgets) {
+              if (w && w.name) {
+                data.widgets_values_by_name[w.name] = w.value;
+              }
+            }
+          }
+        };
+
         const originalConfigure = node.onConfigure;
         node.onConfigure = function(data) {
           const res = originalConfigure ? originalConfigure.apply(this, arguments) : undefined;
           
-          if (data && data.widgets_values) {
-            const vals = data.widgets_values;
-            
-            // Determine layout version by the index of the first number widget
-            const firstNumberIndex = vals.findIndex(v => typeof v === "number");
-            const isNewLayout = firstNumberIndex === 3;
-            
-            let loadedModeVal = null;
-            let loadedSoundAlertVal = null;
-            let loadedAPIKeyVal = null;
-            let loadedSeedVal = null;
-            let loadedNumDelimitersVal = null;
-            let loadedUseCreditsVal = null;
-            let loadedHistoryVal = null;
-            
-            if (isNewLayout) {
-              // New layout order: mode, sound_alert, api_key, seed, number_of_delimiters, ...
-              loadedModeVal = vals[0];
-              loadedSoundAlertVal = vals[1];
-              loadedAPIKeyVal = vals[2];
-              loadedSeedVal = vals[3];
-              loadedNumDelimitersVal = vals[4];
+          if (data) {
+            // Priority 1: Restore by name if saved by name
+            if (data.widgets_values_by_name) {
+              const byName = data.widgets_values_by_name;
+              for (const w of node.widgets || []) {
+                if (w && w.name && byName[w.name] !== undefined) {
+                  w.value = byName[w.name];
+                }
+              }
+              // Verify/heal delimiters
+              const numDelimW = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
+              const count = numDelimW ? (parseInt(numDelimW.value) || 1) : 1;
+              for (let i = 1; i <= 20; i++) {
+                const delimW = (node.widgets || []).find(w => w && w.name === `delimiter_${i}`);
+                if (delimW) {
+                  if (byName[`delimiter_${i}`] !== undefined) {
+                    delimW.value = byName[`delimiter_${i}`];
+                  } else {
+                    const oldStartVal = byName[`starting_delimiter_${i}`];
+                    if (oldStartVal !== undefined && oldStartVal !== null) {
+                      const tag = String(oldStartVal).trim().replace(/^<+/, "").replace(/>+$/, "").replace(/^\/+/, "");
+                      delimW.value = tag || `prompt_${i}`;
+                    } else {
+                      delimW.value = `prompt_${i}`;
+                    }
+                  }
+                }
+              }
+            } 
+            // Priority 2: Robust heuristic fallback for older workflows (positional only)
+            else if (data.widgets_values) {
+              const vals = data.widgets_values;
               
-              // use_comfyui_credits is the last boolean before history/draft
-              const booleans = vals.map((v, idx) => ({val: v, idx})).filter(o => typeof o.val === "boolean");
-              if (booleans.length >= 2) {
-                loadedUseCreditsVal = booleans[booleans.length - 1].val;
-              }
-            } else {
-              // Old layout order: mode, sound_alert, number_of_delimiters, api_key, seed, use_comfyui_credits, ...
-              loadedModeVal = vals[0];
-              loadedSoundAlertVal = vals[1];
-              loadedNumDelimitersVal = vals[2];
-              loadedAPIKeyVal = vals[3];
-              loadedSeedVal = vals[4];
-              loadedUseCreditsVal = vals[5];
-            }
-            
-            // Find history value (which is a JSON string starting with { or [)
-            vals.forEach(val => {
-              if (val && typeof val === "string") {
-                const trimmed = val.trim();
-                if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                  loadedHistoryVal = val;
+              // 1. Identify delimiters start in the values array
+              let firstDelimIndex = -1;
+              for (let i = 2; i < vals.length; i++) {
+                const v = vals[i];
+                if (typeof v === "string") {
+                  const trimmed = v.trim();
+                  if (trimmed.startsWith("<") || trimmed.includes("prompt_") || /^<\/?[a-z_]+\d*>$/i.test(trimmed)) {
+                    firstDelimIndex = i;
+                    break;
+                  }
                 }
               }
-            });
-            
-            if (loadedHistoryVal !== null) {
-              const chatWidget = (node.widgets || []).find(w => w && w.name === "ui_widget");
-              if (chatWidget) {
-                chatWidget.value = loadedHistoryVal;
-                if (node.chatbotUI) {
-                  node.chatbotUI.setValue(loadedHistoryVal);
+              
+              let loadedModeVal = null;
+              let loadedSoundAlertVal = null;
+              let loadedAPIKeyVal = null;
+              let loadedSeedVal = null;
+              let loadedNumDelimitersVal = null;
+              let loadedUseCreditsVal = null;
+              let loadedHistoryVal = null;
+              
+              const controlVals = firstDelimIndex !== -1 ? vals.slice(0, firstDelimIndex) : vals;
+              
+              const numIndices = [];
+              controlVals.forEach((v, idx) => {
+                if (typeof v === "number") {
+                  numIndices.push(idx);
                 }
-              }
-            }
-            if (loadedModeVal !== null) {
-              const modeWidget = (node.widgets || []).find(w => w && w.name === "mode");
-              if (modeWidget) {
-                let normMode = loadedModeVal;
-                if (normMode === "Interactive Chat (Pause)") normMode = "LLM Chat (Pause & Confirm)";
-                else if (normMode === "One-Shot Prompt") normMode = "LLM One-Shot (Immediate)";
-                else if (normMode === "LLM Disabled (Manual)") normMode = "Manual (Pause & Confirm)";
-                else if (normMode === "Pass Last Output (Bypass)") normMode = "Bypass (Pass Last Output)";
-                modeWidget.value = normMode;
-              }
-            }
-            if (loadedSoundAlertVal !== null) {
-              const soundAlertWidget = (node.widgets || []).find(w => w && w.name === "sound_alert");
-              if (soundAlertWidget) {
-                soundAlertWidget.value = loadedSoundAlertVal;
-              }
-            }
-            if (loadedAPIKeyVal !== null) {
-              const apiKeyWidget = (node.widgets || []).find(w => w && w.name === "api_key");
-              if (apiKeyWidget) {
-                apiKeyWidget.value = String(loadedAPIKeyVal);
-              }
-            }
-            if (loadedUseCreditsVal !== null) {
-              const useCreditsWidget = (node.widgets || []).find(w => w && w.name === "use_comfyui_credits");
-              if (useCreditsWidget) {
-                useCreditsWidget.value = loadedUseCreditsVal;
-              }
-            }
-            if (loadedNumDelimitersVal !== null) {
-              const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
-              if (numDelimWidget) {
-                numDelimWidget.value = loadedNumDelimitersVal;
-              }
-            }
-            if (loadedSeedVal !== null) {
-              const seedWidget = (node.widgets || []).find(w => w && w.name === "seed");
-              if (seedWidget) {
-                seedWidget.value = loadedSeedVal;
-              }
-            }
-            
-            // Clean up api_key if LiteGraph positional shift corrupted it with delimiter values
-            const apiKeyW = (node.widgets || []).find(w => w && w.name === "api_key");
-            if (apiKeyW) {
-              const akVal = String(apiKeyW.value || "").trim();
-              if (/^<\/?[a-z_]+\d*>$/i.test(akVal)) {
-                apiKeyW.value = "";
-              }
-            }
-
-            // Clean up shifted values if they got corrupted
-            const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
-            if (numDelimWidget) {
-              const numVal = parseInt(numDelimWidget.value);
-              if (isNaN(numVal) || numVal < 1 || numVal > 20) {
-                numDelimWidget.value = 1;
-              } else {
-                numDelimWidget.value = numVal;
-              }
-            }
-            
-            for (let i = 1; i <= 20; i++) {
-              const startW = (node.widgets || []).find(w => w && w.name === `starting_delimiter_${i}`);
-              const endW = (node.widgets || []).find(w => w && w.name === `ending_delimiter_${i}`);
+              });
+              
+              const boolIndices = [];
+              controlVals.forEach((v, idx) => {
+                if (typeof v === "boolean") {
+                  boolIndices.push(idx);
+                }
+              });
               
               const invalidDelimVals = [
                 "Interactive Chat (Pause)", 
@@ -2668,46 +3541,194 @@ app.registerExtension({
                 "LLM One-Shot (Immediate)",
                 "Manual (Pause & Confirm)",
                 "Manual One-Shot (Immediate)",
-                "Bypass (Pass Last Output)"
+                "Bypass (Pass Last Output)",
+                "fixed", "increment", "decrement", "randomize"
               ];
-
-              if (startW) {
-                const val = String(startW.value || "").trim();
-                if (!val || 
-                    val.startsWith("{") || 
-                    val.startsWith("[") || 
-                    invalidDelimVals.includes(val) || 
-                    val === "true" || 
-                    val === "false") {
-                  startW.value = `<prompt_${i}>`;
+              
+              loadedModeVal = controlVals[0];
+              if (boolIndices.length > 0) {
+                loadedSoundAlertVal = controlVals[boolIndices[0]];
+              }
+              
+              if (numIndices.includes(2)) {
+                loadedNumDelimitersVal = controlVals[2];
+                if (numIndices.includes(4)) {
+                  loadedSeedVal = controlVals[4];
+                }
+                if (typeof controlVals[3] === "string" && !invalidDelimVals.includes(controlVals[3])) {
+                  loadedAPIKeyVal = controlVals[3];
+                }
+              } else if (numIndices.includes(3)) {
+                loadedSeedVal = controlVals[3];
+                if (numIndices.includes(5)) {
+                  loadedNumDelimitersVal = controlVals[5];
+                } else if (numIndices.includes(4)) {
+                  loadedNumDelimitersVal = controlVals[4];
+                }
+                if (typeof controlVals[2] === "string" && !invalidDelimVals.includes(controlVals[2])) {
+                  loadedAPIKeyVal = controlVals[2];
+                }
+              } else {
+                const numbers = controlVals.filter(v => typeof v === "number");
+                if (numbers.length >= 2) {
+                  if (controlVals.length > 5) {
+                    loadedSeedVal = numbers[0];
+                    loadedNumDelimitersVal = numbers[1];
+                  } else {
+                    loadedNumDelimitersVal = numbers[0];
+                    loadedSeedVal = numbers[1];
+                  }
+                } else if (numbers.length === 1) {
+                  loadedNumDelimitersVal = numbers[0];
                 }
               }
               
-              if (endW) {
-                const val = String(endW.value || "").trim();
-                if (!val || 
-                    val.startsWith("{") || 
-                    val.startsWith("[") || 
-                    invalidDelimVals.includes(val) || 
-                    val === "true" || 
-                    val === "false") {
-                  endW.value = `</prompt_${i}>`;
+              let count = parseInt(loadedNumDelimitersVal);
+              if (isNaN(count) || count < 1 || count > 20) {
+                count = 1;
+              }
+              loadedNumDelimitersVal = count;
+              
+              if (firstDelimIndex !== -1) {
+                const postDelimVals = vals.slice(firstDelimIndex);
+                const postBooleans = postDelimVals.filter(v => typeof v === "boolean");
+                if (postBooleans.length > 0) {
+                  loadedUseCreditsVal = postBooleans[0];
+                }
+              }
+              
+              vals.forEach(val => {
+                if (val && typeof val === "string") {
+                  const trimmed = val.trim();
+                  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                    loadedHistoryVal = val;
+                  }
+                }
+              });
+              
+              if (loadedHistoryVal !== null) {
+                const chatWidget = (node.widgets || []).find(w => w && w.name === "ui_widget");
+                if (chatWidget) {
+                  chatWidget.value = loadedHistoryVal;
+                  if (node.chatbotUI) {
+                    node.chatbotUI.setValue(loadedHistoryVal);
+                  }
+                }
+              }
+              if (loadedModeVal !== null) {
+                const modeWidget = (node.widgets || []).find(w => w && w.name === "mode");
+                if (modeWidget) {
+                  let normMode = loadedModeVal;
+                  if (normMode === "Interactive Chat (Pause)") normMode = "LLM Chat (Pause & Confirm)";
+                  else if (normMode === "One-Shot Prompt") normMode = "LLM One-Shot (Immediate)";
+                  else if (normMode === "LLM Disabled (Manual)") normMode = "Manual (Pause & Confirm)";
+                  else if (normMode === "Pass Last Output (Bypass)") normMode = "Bypass (Pass Last Output)";
+                  modeWidget.value = normMode;
+                }
+              }
+              if (loadedSoundAlertVal !== null) {
+                const soundAlertWidget = (node.widgets || []).find(w => w && w.name === "sound_alert");
+                if (soundAlertWidget) {
+                  soundAlertWidget.value = loadedSoundAlertVal;
+                }
+              }
+              if (loadedAPIKeyVal !== null) {
+                const apiKeyWidget = (node.widgets || []).find(w => w && w.name === "api_key");
+                if (apiKeyWidget) {
+                  apiKeyWidget.value = String(loadedAPIKeyVal);
+                }
+              }
+              if (loadedUseCreditsVal !== null) {
+                const useCreditsWidget = (node.widgets || []).find(w => w && w.name === "use_comfyui_credits");
+                if (useCreditsWidget) {
+                  useCreditsWidget.value = loadedUseCreditsVal;
+                }
+              }
+              if (loadedNumDelimitersVal !== null) {
+                const numDelimWidget = (node.widgets || []).find(w => w && w.name === "number_of_delimiters");
+                if (numDelimWidget) {
+                  numDelimWidget.value = loadedNumDelimitersVal;
+                }
+              }
+              if (loadedSeedVal !== null) {
+                const seedWidget = (node.widgets || []).find(w => w && w.name === "seed");
+                if (seedWidget) {
+                  seedWidget.value = loadedSeedVal;
+                }
+              }
+              
+              const apiKeyW = (node.widgets || []).find(w => w && w.name === "api_key");
+              if (apiKeyW) {
+                const akVal = String(apiKeyW.value || "").trim();
+                if (/^<\/?[a-z_]+\d*>$/i.test(akVal)) {
+                  apiKeyW.value = "";
+                }
+              }
+              
+              if (firstDelimIndex !== -1) {
+                const delimiterVals = [];
+                for (let i = firstDelimIndex; i < vals.length; i++) {
+                  const v = vals[i];
+                  if (typeof v === "string") {
+                    const trimmed = v.trim();
+                    if (!trimmed.startsWith("{") && !trimmed.startsWith("[") && !invalidDelimVals.includes(trimmed)) {
+                      delimiterVals.push(trimmed);
+                    }
+                  }
+                }
+
+                const cleanTagName = (val) => val ? val.trim().replace(/^<+/, "").replace(/>+$/, "").replace(/^\/+/, "") : "";
+
+                let isOldPairs = false;
+                if (delimiterVals.length >= 2) {
+                  const val1 = delimiterVals[0];
+                  const val2 = delimiterVals[1];
+                  const tag1 = cleanTagName(val1);
+                  const tag2 = cleanTagName(val2);
+                  if (tag1 === tag2 && val1.startsWith("<") && val2.startsWith("</")) {
+                    isOldPairs = true;
+                  }
+                }
+
+                for (let i = 1; i <= 20; i++) {
+                  const delimW = (node.widgets || []).find(w => w && w.name === `delimiter_${i}`);
+                  if (delimW) {
+                    const idx = isOldPairs ? (i - 1) * 2 : (i - 1);
+                    const savedVal = delimiterVals[idx];
+                    if (savedVal !== undefined && savedVal !== null) {
+                      delimW.value = cleanTagName(savedVal) || `prompt_${i}`;
+                    } else {
+                      delimW.value = `prompt_${i}`;
+                    }
+                  }
                 }
               }
             }
           }
           
           updateNodeLayout();
-
           if (node.chatbotUI) {
             node.chatbotUI.checkAPIStatus();
           }
+          
+          // Post-configure sanitization:
+          // If "control_after_generate" ended up with a number (like 13) or invalid value due to positional shifts,
+          // reset it to "increment" and set seed to 0.
+          const seedW = (node.widgets || []).find(w => w && w.name === "seed");
+          const controlW = (node.widgets || []).find(w => w && (w.name === "control_after_generate" || w.name === "control after generate"));
+          if (controlW) {
+            const val = controlW.value;
+            if (typeof val === "number" || !["fixed", "increment", "decrement", "randomize"].includes(val)) {
+              controlW.value = "increment";
+              if (seedW) {
+                seedW.value = 0;
+              }
+            }
+          }
 
-          // Auto heal size on load if it's excessively large (e.g. runaway layout corruption)
           if (node.size && node.size[1] > 3000) {
             node.setSize([380, 580]);
           }
-          
           return res;
         };
         

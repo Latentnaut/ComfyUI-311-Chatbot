@@ -18,6 +18,112 @@ from . import proxy_service as proxy_svc
 CHAT_SESSIONS = {}
 NODE_INPUT_CACHE = {}
 
+# Module-level cache for ComfyUI Org auth token.
+# Populated when a workflow execution provides a valid token via the hidden input.
+# Used by sidebar proxy requests that can't obtain the token from the frontend.
+_CACHED_COMFY_ORG_TOKEN = None
+
+def _on_prompt_intercept_token(json_data):
+    """Intercept auth tokens from prompt queue requests to cache for sidebar use."""
+    global _CACHED_COMFY_ORG_TOKEN
+    try:
+        extra_data = json_data.get("extra_data", {})
+        token = extra_data.get("auth_token_comfy_org") or extra_data.get("api_key_comfy_org")
+        if token:
+            _CACHED_COMFY_ORG_TOKEN = token
+            LOG.debug("Cached ComfyUI Org auth token from prompt queue request.")
+    except Exception:
+        pass
+    return json_data
+
+PromptServer.instance.add_on_prompt_handler(_on_prompt_intercept_token)
+
+def _normalize_message_content(content) -> str:
+    """Normalize OpenAI-style message content (string or list of parts) to text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for part in content:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict):
+                if part.get("text"):
+                    texts.append(str(part.get("text")))
+                elif part.get("type") == "text" and part.get("text") is not None:
+                    texts.append(str(part.get("text")))
+        return "\n".join(t for t in texts if t)
+    return str(content)
+
+
+def _extract_chat_completion_text(result: dict) -> str:
+    """
+    Extract assistant text from Gemini OpenAI-compatible (or native) JSON responses.
+    Avoids KeyError when message.content is omitted (thinking/safety/empty replies).
+    """
+    if not isinstance(result, dict):
+        raise Exception(f"Unexpected Gemini response type: {type(result).__name__}")
+
+    if "error" in result:
+        err = result["error"]
+        if isinstance(err, dict):
+            raise Exception(f"Gemini API error: {err.get('message', err)}")
+        raise Exception(f"Gemini API error: {err}")
+
+    choices = result.get("choices")
+    if isinstance(choices, list) and choices:
+        choice0 = choices[0] if isinstance(choices[0], dict) else {}
+        message = choice0.get("message") or choice0.get("delta") or {}
+        if not isinstance(message, dict):
+            message = {}
+
+        content = message.get("content")
+        text = _normalize_message_content(content)
+        if text:
+            return text
+
+        # Some Gemini OpenAI-compat replies put text under parts instead of content
+        parts = message.get("parts")
+        if isinstance(parts, list):
+            part_texts = []
+            for part in parts:
+                if isinstance(part, dict) and part.get("text"):
+                    part_texts.append(str(part["text"]))
+                elif isinstance(part, str):
+                    part_texts.append(part)
+            if part_texts:
+                return "\n".join(part_texts)
+
+        finish = choice0.get("finish_reason")
+        preview = json.dumps(result, ensure_ascii=False)[:800]
+        raise Exception(
+            f"Gemini returned no message content (finish_reason={finish}). Response preview: {preview}"
+        )
+
+    # Native generateContent fallback
+    candidates = result.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        texts = []
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            content = cand.get("content") or {}
+            parts = content.get("parts") if isinstance(content, dict) else None
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if isinstance(part, dict) and part.get("text"):
+                    texts.append(str(part["text"]))
+        if texts:
+            return "\n".join(texts)
+
+    preview = json.dumps(result, ensure_ascii=False)[:800]
+    raise Exception(f"Unexpected Gemini response format. Preview: {preview}")
+
+
+
 # Register HTTP POST route to resume chat
 @PromptServer.instance.routes.post("/chatbot-311/chat/resume")
 async def resume_chat(request):
@@ -93,6 +199,7 @@ def tensor_to_base64(tensor: torch.Tensor) -> str:
 
 def get_comfy_org_auth(hidden_token=None):
     """Attempts to get ComfyUI Org authentication token."""
+    global _CACHED_COMFY_ORG_TOKEN
     try:
         from comfy_api_nodes.util._helpers import default_base_url
         comfy_api_base = default_base_url()
@@ -104,27 +211,57 @@ def get_comfy_org_auth(hidden_token=None):
     if isinstance(auth_token, list):
         auth_token = auth_token[0] if auth_token else ""
     
+    if auth_token and not isinstance(auth_token, str):
+        auth_token = None
+
     if not auth_token:
         try:
             from comfy.cli_args import args
             auth_token = getattr(args, "api_key_comfy_org", None)
         except ImportError:
             pass
-            
+
+    # Fallback: use cached token from a previous workflow execution
+    if not auth_token and _CACHED_COMFY_ORG_TOKEN and isinstance(_CACHED_COMFY_ORG_TOKEN, str):
+        auth_token = _CACHED_COMFY_ORG_TOKEN
+        LOG.debug("Using cached ComfyUI Org auth token from prior workflow execution.")
+
+    # Cross-module fallback: check other nodes (like Gemini3 fallback node) for cached token
     if not auth_token:
+        try:
+            import sys
+            for m_name, m in list(sys.modules.items()):
+                if "torch" in m_name:
+                    continue
+                try:
+                    if hasattr(m, "_CACHED_COMFY_ORG_TOKEN"):
+                        token = getattr(m, "_CACHED_COMFY_ORG_TOKEN", None)
+                        if token and isinstance(token, str):
+                            auth_token = token
+                            _CACHED_COMFY_ORG_TOKEN = token
+                            LOG.debug(f"Found and cached ComfyUI Org auth token from module: {m_name}")
+                            break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+            
+    if not auth_token or not isinstance(auth_token, str):
         auth_token = os.environ.get("COMFY_API_TOKEN") or os.environ.get("COMFY_ORG_API_KEY")
 
     if auth_token:
+        # Update cache with valid token
+        _CACHED_COMFY_ORG_TOKEN = auth_token
         auth_header["Authorization"] = f"Bearer {auth_token}"
         auth_header["X-API-KEY"] = auth_token
         
     return comfy_api_base, auth_header, auth_token
 
-def query_gemini_sync(history: list, model: str = None, api_key: str = None, use_comfyui_credits: bool = True, auth_token_comfy_org: str = "") -> str:
+def query_gemini_sync(history: list, model: str = None, api_key: str = None, use_comfyui_credits: bool = True, auth_token_comfy_org: str = "", info: dict = None) -> str:
     """
     Send standard chat history list to Gemini's OpenAI-compatible completions endpoint
     or to official ComfyUI API using ComfyUI Credits.
-    Uses urllib or sync_op synchronously to avoid event loop conflicts.
+    Urllib or sync_op is used synchronously to avoid event loop conflicts.
     """
     if use_comfyui_credits:
         try:
@@ -152,6 +289,23 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                 
                 thread_res = []
                 thread_err = []
+                
+                actual_model = model or "gemini-3.8-flash"
+                # Map legacy or known different names, but let 3.5 models pass through to be tried first
+                if actual_model in ("gemini-3-1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"):
+                    # 3.1-flash-lite-preview was shut down on 2026-05-25
+                    actual_model = "gemini-3.5-flash-lite"
+                elif actual_model in ("gemini-3-5-pro", "gemini-3.5-pro"):
+                    # gemini-3.5-pro does not exist in the Gemini API; latest Pro is 3.1-pro-preview
+                    actual_model = "gemini-3.1-pro-preview"
+                elif actual_model in ("gemini-3-1-pro", "gemini-3.1-pro", "gemini-3-pro-preview"):
+                    actual_model = "gemini-3.1-pro-preview"
+                elif actual_model in ("gemini-2.5-flash", "gemini-2.5-flash-preview"):
+                    actual_model = "gemini-2.5-flash"
+                elif actual_model in ("gemini-2.5-pro", "gemini-2.5-pro-preview"):
+                    actual_model = "gemini-2.5-pro"
+
+                actual_model_used = [actual_model]
                 
                 def _run_async_credits():
                      import asyncio
@@ -226,28 +380,72 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                          DummyNode.hidden.api_key_comfy_org = actual_token
                          DummyNode.hidden.unique_id = "Chatbot311_Generated_Node"
                          
-                         actual_model = model or "gemini-3.5-flash"
-                         if actual_model == "gemini-3-pro-preview":
-                             actual_model = "gemini-3.1-pro-preview"
-                         elif actual_model == "gemini-3-1-pro":
-                             actual_model = "gemini-3.1-pro-preview"
-                         elif actual_model == "gemini-3-1-flash-lite":
-                             actual_model = "gemini-3.1-flash-lite-preview"
+                         # Dynamically mock GeminiNode and GeminiImage2 hidden attributes if they exist
+                         try:
+                             from comfy_api_nodes.nodes_gemini import GeminiNode, GeminiImage2
+                             if not hasattr(GeminiNode, "hidden") or GeminiNode.hidden is None:
+                                 class DummyHiddenNode: pass
+                                 GeminiNode.hidden = DummyHiddenNode()
+                             GeminiNode.hidden.auth_token_comfy_org = actual_token
+                             GeminiNode.hidden.api_key_comfy_org = actual_token
+                             
+                             if not hasattr(GeminiImage2, "hidden") or GeminiImage2.hidden is None:
+                                 class DummyHiddenImg: pass
+                                 GeminiImage2.hidden = DummyHiddenImg()
+                             GeminiImage2.hidden.auth_token_comfy_org = actual_token
+                             GeminiImage2.hidden.api_key_comfy_org = actual_token
+                         except Exception:
+                             pass
                          
-                         result = new_loop.run_until_complete(
-                             asyncio.wait_for(
-                                 sync_op(
-                                     DummyNode,
-                                     endpoint=ApiEndpoint(path=f"/proxy/vertexai/gemini/{actual_model}", method="POST"),
-                                     data=GeminiGenerateContentRequest(
-                                         contents=filtered_contents,
-                                         systemInstruction=system_instr,
+                         result = None
+                         try:
+                             result = new_loop.run_until_complete(
+                                 asyncio.wait_for(
+                                     sync_op(
+                                         DummyNode,
+                                         endpoint=ApiEndpoint(path=f"/proxy/vertexai/gemini/{actual_model_used[0]}", method="POST"),
+                                         data=GeminiGenerateContentRequest(
+                                             contents=filtered_contents,
+                                             systemInstruction=system_instr,
+                                         ),
+                                         response_model=GeminiGenerateContentResponse,
                                      ),
-                                     response_model=GeminiGenerateContentResponse,
-                                 ),
-                                 timeout=60.0
+                                     timeout=120.0
+                                 )
                              )
-                         )
+                         except Exception as first_exc:
+                             # Determine fallback model
+                             fallback_model = None
+                             if actual_model_used[0] in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"):
+                                 # Newer Flash models may not be enabled on the ComfyUI proxy yet
+                                 fallback_model = "gemini-3.5-flash"
+                             elif actual_model_used[0] == "gemini-3.5-flash":
+                                 fallback_model = "gemini-3.5-flash-lite"
+                             elif actual_model_used[0] not in ("gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"):
+                                 if "pro" in actual_model_used[0].lower():
+                                     fallback_model = "gemini-3.1-pro-preview"
+                                 else:
+                                     fallback_model = "gemini-3.5-flash"
+                             
+                             if fallback_model:
+                                 LOG.warning("ComfyUI Credits call with %s failed: %s. Retrying with fallback model %s...", actual_model_used[0], first_exc, fallback_model)
+                                 actual_model_used[0] = fallback_model
+                                 result = new_loop.run_until_complete(
+                                     asyncio.wait_for(
+                                         sync_op(
+                                             DummyNode,
+                                             endpoint=ApiEndpoint(path=f"/proxy/vertexai/gemini/{fallback_model}", method="POST"),
+                                             data=GeminiGenerateContentRequest(
+                                                 contents=filtered_contents,
+                                                 systemInstruction=system_instr,
+                                             ),
+                                             response_model=GeminiGenerateContentResponse,
+                                         ),
+                                         timeout=120.0
+                                     )
+                                 )
+                             else:
+                                 raise first_exc
                          
                          if result and result.candidates:
                              parts = []
@@ -278,6 +476,8 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
                 if thread_err:
                      raise thread_err[0]
                      
+                if isinstance(info, dict):
+                    info["model"] = actual_model_used[0]
                 return thread_res[0]
         except Exception as e:
             LOG.warning("ComfyUI Credits failed. Reason: %s. Falling back to custom keys...", e)
@@ -285,8 +485,12 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
     cfg = proxy_svc.SERVICES.get("gemini", {})
     proxypath = "v1/chat/completions"
     
+    actual_model_used = model or cfg.get("default_model", "gemini-3.8-flash")
+    if isinstance(info, dict):
+        info["model"] = actual_model_used
+
     body = {
-        "model": model or cfg.get("default_model", "gemini-3.5-flash"),
+        "model": actual_model_used,
         "messages": history,
         "stream": False
     }
@@ -311,14 +515,21 @@ def query_gemini_sync(history: list, model: str = None, api_key: str = None, use
         with urllib.request.urlopen(req, timeout=timeout) as response:
             resp_data = response.read().decode("utf-8")
             result = json.loads(resp_data)
-            return result["choices"][0]["message"]["content"]
+            return _extract_chat_completion_text(result)
     except urllib.error.HTTPError as e:
         err_text = e.read().decode("utf-8")
         LOG.error("Gemini API HTTP Error %s: %s", e.code, err_text)
         raise Exception(f"Gemini API returned error {e.code}: {err_text}")
     except Exception as e:
         LOG.error("Failed to query Gemini API: %s", e)
-        raise Exception(f"Failed to query Gemini API: {str(e)}")
+        err_msg = str(e)
+        if "getaddrinfo failed" in err_msg or "11001" in err_msg:
+            raise Exception(
+                f"Failed to query Gemini API: {err_msg}. This network error usually occurs when the host cannot be resolved. "
+                "If your credentials or API key are defined in an external node, make sure to execute the FULL workflow (Queue Prompt) "
+                "rather than running only this group/node, so that the API key is successfully propagated."
+            )
+        raise Exception(f"Failed to query Gemini API: {err_msg}")
 
 def extract_delimited_content(text: str, start: str, end: str) -> str:
     if not text or not start:
@@ -475,6 +686,14 @@ def ensure_latest_user_message_has_image(api_messages: list):
             else:
                 msg["content"] = ""
 
+def derive_delimiter_tags(val: str, index: int) -> tuple[str, str]:
+    if not val or not val.strip():
+        return f"<prompt_{index}>", f"</prompt_{index}>"
+    tag = val.strip().lstrip('<').rstrip('>').lstrip('/')
+    if not tag:
+        return f"<prompt_{index}>", f"</prompt_{index}>"
+    return f"<{tag}>", f"</{tag}>"
+
 # region Chatbot311
 class Chatbot311:
     @classmethod
@@ -511,6 +730,7 @@ class Chatbot311:
                 "prompt": ("STRING", {"forceInput": True, "multiline": True}),
                 "system_general": ("STRING", {"forceInput": True, "multiline": True}),
                 "system_variable": ("STRING", {"forceInput": True, "multiline": True}),
+                "project_context": ("STRING", {"forceInput": True, "multiline": True}),
             },
             "hidden": {
                 "node_id": "UNIQUE_ID",
@@ -518,8 +738,7 @@ class Chatbot311:
             }
         }
         for i in range(1, 21):
-            inputs["required"][f"starting_delimiter_{i}"] = ("STRING", {"default": f"<prompt_{i}>"})
-            inputs["required"][f"ending_delimiter_{i}"] = ("STRING", {"default": f"</prompt_{i}>"})
+            inputs["required"][f"delimiter_{i}"] = ("STRING", {"default": f"prompt_{i}"})
         inputs["required"]["use_comfyui_credits"] = ("BOOLEAN", {
             "default": True,
             "label_on": "Use ComfyUI Credits",
@@ -578,6 +797,12 @@ class Chatbot311:
         if isinstance(auth_token_comfy_org, list):
             auth_token_comfy_org = auth_token_comfy_org[0] if auth_token_comfy_org else ""
         
+        # Cache the token for sidebar proxy requests
+        if auth_token_comfy_org:
+            global _CACHED_COMFY_ORG_TOKEN
+            _CACHED_COMFY_ORG_TOKEN = auth_token_comfy_org
+            LOG.debug("Cached ComfyUI Org auth token from workflow execution.")
+        
         image = kwargs.get("image")
         
         # Helper to unpack and clean string inputs from list wrappers
@@ -591,22 +816,19 @@ class Chatbot311:
         prompt_str = unpack_str(kwargs.get("prompt", ""))
         system_general_str = unpack_str(kwargs.get("system_general", ""))
         system_variable_str = unpack_str(kwargs.get("system_variable", ""))
-        system_legacy_str = unpack_str(kwargs.get("system", ""))
+        project_context_str = unpack_str(kwargs.get("project_context", ""))
         
         # 1. Determine the base/general system prompt
         gen_prompt = system_general_str
         if not gen_prompt or not gen_prompt.strip():
-            # Fallback to legacy system input if present, otherwise to file
-            if system_legacy_str and system_legacy_str.strip():
-                gen_prompt = system_legacy_str
-            else:
-                try:
-                    from pathlib import Path
-                    sys_prompt_file = Path(__file__).resolve().parent.parent / "system_prompt.md"
-                    if sys_prompt_file.exists():
-                        gen_prompt = sys_prompt_file.read_text(encoding="utf-8")
-                except Exception as e:
-                    LOG.error("Failed to load default system prompt from file: %s", e)
+            # Fallback to file
+            try:
+                from pathlib import Path
+                sys_prompt_file = Path(__file__).resolve().parent.parent / "system_prompt.md"
+                if sys_prompt_file.exists():
+                    gen_prompt = sys_prompt_file.read_text(encoding="utf-8")
+            except Exception as e:
+                LOG.error("Failed to load default system prompt from file: %s", e)
 
         # 2. Combine general and variable system prompts
         system_parts = []
@@ -614,6 +836,14 @@ class Chatbot311:
             system_parts.append(gen_prompt.strip())
         if system_variable_str and system_variable_str.strip():
             system_parts.append(system_variable_str.strip())
+        if project_context_str and project_context_str.strip():
+            system_parts.append(
+                "### ACTIVE PROJECT CONTEXT (USER DATA)\n"
+                "The following project context, pre-production notes, show bible, character descriptions, or previous planning work has been supplied by the user. You MUST read this data carefully, respect all names/facts/parameters declared within it, and adapt your cinematic planning around it:\n"
+                "```\n"
+                + project_context_str.strip()
+                + "\n```"
+            )
             
         # Append active output delimiters instructions
         num_delimiters = kwargs.get("number_of_delimiters", 1)
@@ -624,17 +854,23 @@ class Chatbot311:
         delimiters_instructions = []
         for i in range(1, 21):
             if i <= count:
-                start = kwargs.get(f"starting_delimiter_{i}", f"<prompt_{i}>")
-                end = kwargs.get(f"ending_delimiter_{i}", f"</prompt_{i}>")
+                val = kwargs.get(f"delimiter_{i}", f"prompt_{i}")
+                start, end = derive_delimiter_tags(val, i)
                 delimiters_instructions.append(f"- Delimiter {i}: Wrap the final output between '{start}' and '{end}'")
         
         if delimiters_instructions:
-            start_ex = kwargs.get('starting_delimiter_1', '<prompt_1>')
-            end_ex = kwargs.get('ending_delimiter_1', '</prompt_1>')
+            val_1 = kwargs.get("delimiter_1", "prompt_1")
+            start_ex, end_ex = derive_delimiter_tags(val_1, 1)
+            
+            variation_instruction = ""
+            if count > 1:
+                variation_instruction = "\n- **Multiple Variations**: Since you have multiple active delimiters, you MUST generate a slightly different variation or alternative version of the prompt/output for each active delimiter. Do not repeat the same content; customize each variation slightly while remaining true to the user's intent."
+
             delim_text = (
                 "### IMPORTANT: ACTIVE OUTPUT DELIMITERS\n"
                 "If the user asks you to write, generate, or output a specific prompt, text, code, or JSON that they want to extract, you MUST wrap the entire final output using these exact delimiters (without markdown code blocks around the delimiters themselves):\n"
                 + "\n".join(delimiters_instructions)
+                + variation_instruction
                 + f"\n\n- If your response is formatted as a JSON object, wrap the ENTIRE JSON object itself inside the delimiters. Example:\n{start_ex}\n{{\n  \"key\": \"value\"\n}}\n{end_ex}\n"
                 + f"- If your response is standard text/markdown, wrap the final prompt block inside the delimiters. Example:\n{start_ex}\nyour prompt here\n{end_ex}"
             )
@@ -649,6 +885,7 @@ class Chatbot311:
             "last_seed": None, 
             "last_system_general": None,
             "last_system_variable": None,
+            "last_project_context": None,
             "initialized": False
         })
         cache_initialized = node_cache.get("initialized", False)
@@ -657,11 +894,13 @@ class Chatbot311:
         last_seed = node_cache.get("last_seed")
         last_sys_gen = node_cache.get("last_system_general")
         last_sys_var = node_cache.get("last_system_variable")
+        last_proj_ctx = node_cache.get("last_project_context")
 
         # Determine if inputs have changed
         prompt_changed = (last_prompt != prompt_str)
         sys_gen_changed = (last_sys_gen != system_general_str)
         sys_var_changed = (last_sys_var != system_variable_str)
+        proj_ctx_changed = (last_proj_ctx != project_context_str)
 
         image_changed = True
         if last_image is not None and image is not None:
@@ -689,14 +928,18 @@ class Chatbot311:
             node_cache["last_seed"] = seed
             node_cache["last_system_general"] = system_general_str
             node_cache["last_system_variable"] = system_variable_str
+            node_cache["last_project_context"] = project_context_str
             node_cache["initialized"] = True
             is_really_new = False
-        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed) or seed_changed or sys_gen_changed or sys_var_changed:
+        elif (prompt_str.strip() and prompt_changed) or (image is not None and image_changed) or seed_changed or sys_gen_changed or sys_var_changed or proj_ctx_changed:
             is_really_new = True
 
         # Determine if we received execution inputs (prompt or image) from the workflow graph or a UI draft
         draft = ui_widget.get("draft", "").strip()
         has_draft = bool(draft)
+        is_oneshot_mode = actual_mode in ("LLM One-Shot (Immediate)", "Manual One-Shot (Immediate)")
+        # One-Shot UX: leave the prompt in the text box and reuse it on later Runs
+        clear_draft_flag = has_draft and not is_oneshot_mode
         
         has_new_input = False
         user_parts = []
@@ -705,6 +948,7 @@ class Chatbot311:
             user_parts.append({"type": "text", "text": draft})
             has_new_input = True
             is_really_new = True
+            node_cache["last_oneshot_draft"] = draft
             
             if image is not None:
                 if len(image.shape) == 4:
@@ -726,6 +970,8 @@ class Chatbot311:
             if prompt_str and prompt_str.strip():
                 user_parts.append({"type": "text", "text": prompt_str.strip()})
                 has_new_input = True
+                if is_oneshot_mode:
+                    node_cache["last_oneshot_draft"] = prompt_str.strip()
                 
             if image is not None:
                 if len(image.shape) == 4:
@@ -745,106 +991,170 @@ class Chatbot311:
                             "image_url": {"url": base64_image}
                         })
                         has_new_input = True
+
+        # Empty draft box must stay empty: never resurrect cached/history prompt text.
+        # Reuse UX = leave the text in the textarea (frontend keeps it for One-Shot).
+        if is_oneshot_mode and not has_draft and not (prompt_str and prompt_str.strip()):
+            node_cache.pop("last_oneshot_draft", None)
+
         # Check if we should skip auto-execution in interactive/manual pause modes when there is no graph prompt or UI draft
+        should_query_llm = True
         if actual_mode in ("LLM Chat (Pause & Confirm)", "Manual (Pause & Confirm)") and not prompt_str.strip() and not has_draft:
-            has_new_input = False
+            if image is not None:
+                # We have input images in a pause-and-confirm mode.
+                # Display the images in the chat history without query or text description,
+                # so the user can see them and type their prompt.
+                should_query_llm = False
+            else:
+                has_new_input = False
 
         if has_new_input and is_really_new:
-            if image is not None and not prompt_str and not has_draft:
-                num_imgs = len(image) if len(image.shape) == 4 else 1
-                desc_text = "Describe this image." if num_imgs <= 1 else "Describe these images."
-                user_parts.insert(0, {"type": "text", "text": desc_text})
-                
             user_message = {
                 "role": "user",
                 "content": user_parts if len(user_parts) > 1 else (user_parts[0]["text"] if user_parts[0]["type"] == "text" else user_parts)
             }
             history.append(user_message)
             
+            # Send intermediate update so the client displays the user's input/images immediately
+            if node_id:
+                try:
+                    PromptServer.instance.send_sync("chatbot311-update-history", {
+                        "node_id": node_id,
+                        "history": history,
+                        "clear_draft": clear_draft_flag
+                    })
+                except Exception as e:
+                    LOG.error("Failed to emit intermediate user message update: %s", e)
+            
             # Query Gemini synchronously
             if actual_mode in ("LLM Chat (Pause & Confirm)", "LLM One-Shot (Immediate)"):
-                try:
-                    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-                    
-                    # Prepend system prompt to temp list for API call
-                    api_messages = []
-                    if system and system.strip():
-                        api_messages.append({"role": "system", "content": system.strip()})
-                    
-                    for msg in history:
-                        api_messages.append({
-                            "role": msg.get("role"),
-                            "content": msg.get("content")
-                        })
-                    ensure_latest_user_message_has_image(api_messages)
-                    
-                    LOG.info(f"Querying Gemini ({model}) with system instruction...")
-                    if node_id:
-                        try:
-                            PromptServer.instance.send_sync("chatbot311-show-typing", {
-                                "node_id": node_id,
-                                "show": True
-                            })
-                        except Exception:
-                            pass
+                if should_query_llm:
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org)
-                        history.append({"role": "assistant", "content": assistant_response})
-                    finally:
+                        model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+                        
+                        # Prepend system prompt to temp list for API call
+                        api_messages = []
+                        if system and system.strip():
+                            api_messages.append({"role": "system", "content": system.strip()})
+                        
+                        for msg in history:
+                            api_messages.append({
+                                "role": msg.get("role"),
+                                "content": msg.get("content")
+                            })
+                        ensure_latest_user_message_has_image(api_messages)
+                        
+                        LOG.info(f"Querying Gemini ({model}) with system instruction...")
                         if node_id:
                             try:
                                 PromptServer.instance.send_sync("chatbot311-show-typing", {
                                     "node_id": node_id,
-                                    "show": False
+                                    "show": True
                                 })
                             except Exception:
                                 pass
-                except Exception as e:
-                    history.append({"role": "assistant", "content": f"Execution Error: {str(e)}"})
-                
-                # Send websocket update back to frontend chat panel so it syncs instantly without reload
-                if node_id:
-                    try:
-                        PromptServer.instance.send_sync("chatbot311-update-history", {
-                            "node_id": node_id,
-                            "history": history,
-                            "clear_draft": has_draft
-                        })
+                        info = {}
+                        try:
+                            assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
+                            history.append({"role": "assistant", "content": assistant_response})
+                        finally:
+                            if node_id:
+                                try:
+                                    PromptServer.instance.send_sync("chatbot311-show-typing", {
+                                        "node_id": node_id,
+                                        "show": False
+                                    })
+                                except Exception:
+                                    pass
                     except Exception as e:
-                        LOG.error("Failed to emit websocket update: %s", e)
+                        err_msg = str(e)
+                        if "API key not valid" in err_msg or "valid API key" in err_msg:
+                            friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
+                        elif any(k in err_msg.lower() for k in ("prepayment", "credits", "depleted", "billing")):
+                            friendly = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in Google AI Studio (https://aistudio.google.com/)."
+                        elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
+                            friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
+                        elif "getaddrinfo failed" in err_msg or "11001" in err_msg:
+                            friendly = (
+                                "⚠️ **Connection / API Key Error:** Failed to resolve the Gemini API host (getaddrinfo failed). "
+                                "This network error usually indicates that the hostname could not be resolved.\n\n"
+                                "**Solution:** If your API key is defined in an external node (e.g., outside this group), "
+                                "please ensure you execute the **FULL workflow** (Queue Prompt) rather than running only this group/node, "
+                                "so that all credentials and inputs are properly propagated."
+                            )
+                        elif "503" in err_msg or "unavailable" in err_msg.lower():
+                            friendly = "⚠️ **Gemini Service Unavailable (503):** The Gemini API is currently overloaded or undergoing maintenance. Please wait a moment and try again."
+                        else:
+                            friendly = f"⚠️ **Execution Error:** {err_msg}"
+                        history.append({"role": "assistant", "content": friendly})
+                    
+                    # Send websocket update back to frontend chat panel so it syncs instantly without reload
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": clear_draft_flag,
+                                "model": info.get("model", model)
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
+                else:
+                    # Just update the history with the images so the frontend shows them
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": False
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
             elif actual_mode in ("Manual (Pause & Confirm)", "Manual One-Shot (Immediate)"):
-                # Wrap the user's text in the first active delimiter
-                num_delimiters = kwargs.get("number_of_delimiters", 1)
-                if isinstance(num_delimiters, list):
-                    num_delimiters = num_delimiters[0]
-                count = int(num_delimiters)
-                start_d = "<prompt_1>"
-                end_d = "</prompt_1>"
-                if count >= 1:
-                    start_d = kwargs.get("starting_delimiter_1", "<prompt_1>")
-                    end_d = kwargs.get("ending_delimiter_1", "</prompt_1>")
-                
-                # Get the plain text from user_parts
-                user_text = ""
-                for part in user_parts:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        user_text += part.get("text", "")
-                    elif isinstance(part, str):
-                        user_text += part
-                
-                wrapped_text = f"{start_d}\n{user_text.strip()}\n{end_d}"
-                history.append({"role": "assistant", "content": wrapped_text})
-                
-                # Send websocket update back to frontend chat panel so it syncs instantly without reload
-                if node_id:
-                    try:
-                        PromptServer.instance.send_sync("chatbot311-update-history", {
-                            "node_id": node_id,
-                            "history": history,
-                            "clear_draft": has_draft
-                        })
-                    except Exception as e:
-                        LOG.error("Failed to emit websocket update: %s", e)
+                if should_query_llm:
+                    # Wrap the user's text in the first active delimiter
+                    num_delimiters = kwargs.get("number_of_delimiters", 1)
+                    if isinstance(num_delimiters, list):
+                        num_delimiters = num_delimiters[0]
+                    count = int(num_delimiters)
+                    val_1 = kwargs.get("delimiter_1", "prompt_1")
+                    start_d, end_d = derive_delimiter_tags(val_1, 1)
+                    
+                    # Get the plain text from user_parts
+                    user_text = ""
+                    for part in user_parts:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            user_text += part.get("text", "")
+                        elif isinstance(part, str):
+                            user_text += part
+
+                    if user_text.strip() and is_oneshot_mode:
+                        node_cache["last_oneshot_draft"] = user_text.strip()
+                    
+                    wrapped_text = f"{start_d}\n{user_text.strip()}\n{end_d}"
+                    history.append({"role": "assistant", "content": wrapped_text})
+                    
+                    # Send websocket update back to frontend chat panel so it syncs instantly without reload
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": clear_draft_flag
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
+                else:
+                    # Just update the history with the images so the frontend shows them
+                    if node_id:
+                        try:
+                            PromptServer.instance.send_sync("chatbot311-update-history", {
+                                "node_id": node_id,
+                                "history": history,
+                                "clear_draft": False
+                            })
+                        except Exception as e:
+                            LOG.error("Failed to emit websocket update: %s", e)
             
             # Update cache of last processed inputs in global cache
             node_cache = NODE_INPUT_CACHE.setdefault(node_id, {
@@ -853,6 +1163,7 @@ class Chatbot311:
                 "last_seed": None, 
                 "last_system_general": None,
                 "last_system_variable": None,
+                "last_project_context": None,
                 "initialized": False
             })
             node_cache["last_image"] = image
@@ -860,6 +1171,7 @@ class Chatbot311:
             node_cache["last_seed"] = seed
             node_cache["last_system_general"] = system_general_str
             node_cache["last_system_variable"] = system_variable_str
+            node_cache["last_project_context"] = project_context_str
             node_cache["initialized"] = True
 
         # Handle Pause/Interactive mode if requested
@@ -869,14 +1181,23 @@ class Chatbot311:
             CHAT_SESSIONS[node_id] = {
                 "event": event,
                 "history": history,
-                "action": None
+                "action": None,
+                "api_key": api_key,
+                "auth_token_comfy_org": auth_token_comfy_org,
+                "system_general": system_general_str,
+                "system_variable": system_variable_str,
+                "project_context": project_context_str
             }
             
             # Send notification to UI that we are paused and waiting for confirmation
             try:
                 PromptServer.instance.send_sync("chatbot311-chat-paused", {
                     "node_id": node_id,
-                    "sound_alert": sound_alert
+                    "sound_alert": sound_alert,
+                    "api_key": api_key,
+                    "system_general": system_general_str,
+                    "system_variable": system_variable_str,
+                    "project_context": project_context_str
                 })
             except Exception as e:
                 LOG.error("Failed to emit pause websocket: %s", e)
@@ -910,7 +1231,7 @@ class Chatbot311:
         elif actual_mode == "LLM One-Shot (Immediate)" and not has_new_input:
             if history and history[-1].get("role") == "user":
                 try:
-                    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+                    model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
                     
                     # Prepend system prompt to temp list for API call
                     api_messages = []
@@ -933,8 +1254,9 @@ class Chatbot311:
                             })
                         except Exception:
                             pass
+                    info = {}
                     try:
-                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org)
+                        assistant_response = query_gemini_sync(api_messages, model, api_key=api_key, use_comfyui_credits=use_comfyui_credits, auth_token_comfy_org=auth_token_comfy_org, info=info)
                         history.append({"role": "assistant", "content": assistant_response})
                     finally:
                         if node_id:
@@ -946,12 +1268,32 @@ class Chatbot311:
                             except Exception:
                                 pass
                 except Exception as e:
-                    history.append({"role": "assistant", "content": f"Execution Error: {str(e)}"})
+                    err_msg = str(e)
+                    if "API key not valid" in err_msg or "valid API key" in err_msg:
+                        friendly = "⚠️ **API Key Missing:** Please configure your Gemini API Key in the `api_key` widget of this node."
+                    elif any(k in err_msg.lower() for k in ("prepayment", "credits", "depleted", "billing")):
+                        friendly = "⚠️ **Billing Issue / Credits Depleted:** Your Gemini API prepayment credits are depleted. Please check your billing or add funds in Google AI Studio (https://aistudio.google.com/)."
+                    elif "rate_limited" in err_msg or "429" in err_msg or "quota" in err_msg.lower():
+                        friendly = "⚠️ **Rate Limit Exceeded:** You have exceeded the API request quota. Please wait a moment before trying again."
+                    elif "getaddrinfo failed" in err_msg or "11001" in err_msg:
+                        friendly = (
+                            "⚠️ **Connection / API Key Error:** Failed to resolve the Gemini API host (getaddrinfo failed). "
+                            "This network error usually indicates that the hostname could not be resolved.\n\n"
+                            "**Solution:** If your API key is defined in an external node (e.g., outside this group), "
+                            "please ensure you execute the **FULL workflow** (Queue Prompt) rather than running only this group/node, "
+                            "so that all credentials and inputs are properly propagated."
+                        )
+                    elif "503" in err_msg or "unavailable" in err_msg.lower():
+                        friendly = "⚠️ **Gemini Service Unavailable (503):** The Gemini API is currently overloaded or undergoing maintenance. Please wait a moment and try again."
+                    else:
+                        friendly = f"⚠️ **Execution Error:** {err_msg}"
+                    history.append({"role": "assistant", "content": friendly})
                     if node_id:
                         try:
                             PromptServer.instance.send_sync("chatbot311-update-history", {
                                 "node_id": node_id,
-                                "history": history
+                                "history": history,
+                                "model": info.get("model", model)
                             })
                         except Exception:
                             pass
@@ -1000,13 +1342,22 @@ class Chatbot311:
         for i in range(1, 21):
             delim_val = ""
             if i <= count:
-                start = kwargs.get(f"starting_delimiter_{i}", f"<prompt_{i}>")
-                end = kwargs.get(f"ending_delimiter_{i}", f"</prompt_{i}>")
+                val = kwargs.get(f"delimiter_{i}", f"prompt_{i}")
+                start, end = derive_delimiter_tags(val, i)
                 delim_val = extract_delimited_content(last_llm_message, start, end)
             delim_outs.append(delim_val)
 
+        # Resolve the model name
+        model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+        actual_model = info.get("model") if 'info' in locals() and "model" in info else ui_widget.get("config", {}).get("lastUsedModel", model)
+        if "config" not in ui_widget or not isinstance(ui_widget["config"], dict):
+            ui_widget["config"] = {}
+        ui_widget["config"]["lastUsedModel"] = actual_model
+
         ui_widget["history"] = history
-        if "draft" in ui_widget:
+        # One-Shot: trust the live UI draft as-is (do not reinject cached text into an empty box).
+        # Non-One-Shot: clear draft after execution.
+        if not is_oneshot_mode and "draft" in ui_widget:
             ui_widget["draft"] = ""
         return (ui_widget, last_message, last_user_message, last_llm_message, all_messages) + tuple(delim_outs)
 # endregion

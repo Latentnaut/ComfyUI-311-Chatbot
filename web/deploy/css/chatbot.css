@@ -30,6 +30,7 @@
   background: var(--cb311-bg);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
+  isolation: isolate;
   border: 1px solid var(--cb311-border);
   border-radius: 12px;
   overflow: hidden;
@@ -245,9 +246,33 @@
   background-color: rgba(99, 102, 241, 0.08);
 }
 
+@keyframes undo-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
+    color: var(--cb311-text-muted);
+  }
+  30% {
+    transform: scale(1.18) rotate(-15deg);
+    box-shadow: 0 0 0 6px rgba(99, 102, 241, 0);
+    color: #a5b4fc;
+    background-color: rgba(99, 102, 241, 0.15);
+  }
+  60% {
+    transform: scale(1) rotate(5deg);
+    color: #a5b4fc;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+    color: var(--cb311-text-muted);
+  }
+}
+
 .chatbot311-btn-undo.highlight-pulse {
-  color: var(--cb311-primary-color) !important;
-  background-color: rgba(99, 102, 241, 0.08);
+  animation: undo-pulse 1.0s cubic-bezier(0.25, 1, 0.5, 1);
+  color: #a5b4fc !important;
+  background-color: rgba(99, 102, 241, 0.1) !important;
 }
 
 /* Sidebar Conversation Manager */
@@ -424,7 +449,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  scroll-behavior: smooth;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
 }
 
 .chatbot311-messages::-webkit-scrollbar {
@@ -527,14 +553,10 @@
   margin-top: 4px;
 }
 
-.chatbot311-message.user .chatbot311-msg-toolbar {
+.chatbot311-message.user .chatbot311-msg-toolbar,
+.chatbot311-message.assistant .chatbot311-msg-toolbar {
   align-self: flex-end;
   justify-content: flex-end;
-}
-
-.chatbot311-message.assistant .chatbot311-msg-toolbar {
-  align-self: flex-start;
-  justify-content: flex-start;
 }
 
 .chatbot311-message:hover .chatbot311-msg-toolbar {
@@ -1270,3 +1292,277 @@
   color: #ffffff !important; /* Bold white */
   font-weight: 600 !important;
 }
+
+/* Custom Confirm Modal Styles */
+.chatbot311-confirm-modal-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(10, 10, 12, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  opacity: 0;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 20px;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.chatbot311-confirm-modal-overlay.active {
+  opacity: 1;
+}
+
+.chatbot311-confirm-modal-card {
+  text-align: center;
+  color: var(--cb311-text-main);
+  width: 100%;
+  max-width: 260px;
+  background: rgba(25, 25, 30, 0.85);
+  border: 1px solid var(--cb311-border);
+  padding: 18px 16px;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  transform: scale(0.9) translateY(10px);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.chatbot311-confirm-modal-card.active {
+  transform: scale(1) translateY(0);
+}
+
+.chatbot311-confirm-modal-icon {
+  color: var(--cb311-glow-red);
+  margin-bottom: 10px;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.4));
+  display: flex;
+  justify-content: center;
+  animation: cb311-pulse 2s infinite ease-in-out;
+}
+
+.chatbot311-confirm-modal-content p {
+  font-size: 12.5px;
+  color: var(--cb311-text-main);
+  line-height: 1.45;
+  margin: 0 0 16px 0;
+  font-weight: 500;
+}
+
+.chatbot311-confirm-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.chatbot311-confirm-modal-btn {
+  border: none;
+  padding: 6px 16px;
+  border-radius: 14px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 11px;
+  transition: transform 0.1s ease, filter 0.15s ease;
+  width: 50%;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.chatbot311-confirm-modal-btn.cancel {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--cb311-text-muted);
+}
+
+.chatbot311-confirm-modal-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--cb311-text-main);
+}
+
+.chatbot311-confirm-modal-btn.confirm {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: #ffffff;
+  box-shadow: 0 3px 8px rgba(239, 68, 68, 0.25);
+}
+
+.chatbot311-confirm-modal-btn.confirm:hover {
+  filter: brightness(1.1);
+}
+
+.chatbot311-confirm-modal-btn:active {
+  transform: scale(0.95);
+}
+
+/* Sidebar Footer & Delete All Button */
+.chatbot311-sidebar-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--cb311-border);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(10, 10, 12, 0.2);
+}
+
+.chatbot311-btn-delete-all {
+  background: transparent;
+  border: none;
+  color: var(--cb311-text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 4px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+}
+
+.chatbot311-btn-delete-all svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.chatbot311-btn-delete-all:hover {
+  color: #f87171; /* soft red */
+  background-color: rgba(239, 68, 68, 0.08);
+}
+
+.chatbot311-btn-delete-all:active {
+  transform: scale(0.98);
+}
+
+/* Mermaid Diagram Styling - Premium Minimalist Dark Theme */
+.chatbot311-mermaid-container {
+  background: rgba(20, 20, 25, 0.35) !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border-radius: 12px !important;
+  padding: 16px !important;
+  margin: 10px 0 !important;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.chatbot311-mermaid-container .mermaid-preview {
+  width: 100%;
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.chatbot311-mermaid-container .mermaid-preview svg {
+  max-width: 100%;
+  height: auto !important;
+  background: transparent !important;
+}
+
+/* Force standard font and strict line-height to resolve letter clipping (y, p, g, q) */
+.chatbot311-mermaid-container svg,
+.chatbot311-mermaid-container svg * {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
+/* Fix vertical baseline alignment inside nodes */
+.chatbot311-mermaid-container svg text {
+  dominant-baseline: central !important;
+  line-height: normal !important;
+}
+
+.chatbot311-mermaid-container svg tspan,
+.chatbot311-mermaid-container .nodeLabel,
+.chatbot311-mermaid-container .label,
+.chatbot311-mermaid-container .label div,
+.chatbot311-mermaid-container .label span {
+  line-height: normal !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: #f1f5f9 !important;
+  text-align: center;
+  box-sizing: border-box !important;
+}
+
+/* Force standard height and flex vertical centering inside foreignObject HTML nodes */
+.chatbot311-mermaid-container foreignObject {
+  overflow: visible !important;
+}
+
+.chatbot311-mermaid-container foreignObject > div {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  line-height: normal !important;
+}
+
+/* Style the flowchart node boxes */
+.chatbot311-mermaid-container svg .node rect,
+.chatbot311-mermaid-container svg .node polygon,
+.chatbot311-mermaid-container svg .node circle,
+.chatbot311-mermaid-container svg .node .label-container {
+  fill: rgba(255, 255, 255, 0.02) !important;
+  stroke: rgba(255, 255, 255, 0.1) !important;
+  stroke-width: 1px !important;
+  rx: 6px !important; /* Rounded corners */
+  ry: 6px !important;
+  transition: fill 0.2s ease, stroke 0.2s ease, filter 0.2s ease;
+}
+
+/* Hover effects on nodes */
+.chatbot311-mermaid-container svg .node:hover rect,
+.chatbot311-mermaid-container svg .node:hover polygon,
+.chatbot311-mermaid-container svg .node:hover circle,
+.chatbot311-mermaid-container svg .node:hover .label-container {
+  fill: rgba(99, 102, 241, 0.06) !important;
+  stroke: rgba(99, 102, 241, 0.3) !important;
+  filter: drop-shadow(0 2px 6px rgba(99, 102, 241, 0.15));
+}
+
+/* Style the edges/connecting lines - solid slate color to prevent arrowhead crossing */
+.chatbot311-mermaid-container svg .edgePath path,
+.chatbot311-mermaid-container svg .edgePath .path,
+.chatbot311-mermaid-container svg .edgePathLink,
+.chatbot311-mermaid-container svg .edgePaths path,
+.chatbot311-mermaid-container svg .edgePaths .path {
+  stroke: #475569 !important;
+  stroke-width: 1.2px !important;
+}
+
+/* Style arrowheads - solid matching color to hide line ending behind it */
+.chatbot311-mermaid-container svg .marker path,
+.chatbot311-mermaid-container svg marker path,
+.chatbot311-mermaid-container svg [id*="arrowhead"] path {
+  fill: #475569 !important;
+  stroke: #475569 !important;
+}
+
+.chatbot311-mermaid-container .mermaid-error {
+  color: var(--cb311-glow-red);
+  font-weight: 600;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+
+
+
+
